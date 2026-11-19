@@ -22,6 +22,10 @@ target_link_libraries(Qt-fighting-games
         Qt::Widgets
 )
 
+if(WIN32)
+    target_link_libraries(Qt-fighting-games PRIVATE winmm)
+endif()
+
 qt_add_resources(Qt-fighting-games "app_resources"
     PREFIX "/"
     FILES
@@ -29,6 +33,7 @@ qt_add_resources(Qt-fighting-games "app_resources"
         res/p1_attack1.png res/p1_attack2.png res/p1_hurt.png
         res/p2_ldle.png res/p2_walk.png res/p2_jump.png
         res/p2_attack1.png res/p2_attack2.png res/p2_hurt.png
+        audio/bgm.wav audio/hit.wav audio/jump.wav audio/ko.wav
 )
 
 install(TARGETS Qt-fighting-games

@@ -33,6 +33,10 @@ private:
     void resetRound();
     void checkWin();
     void updateUiWidgets();
+    void initAudio();
+    void playSfx(const char *resName, const char *alias);
+    void drawMenu(QPainter &p);
+    void drawScene(QPainter &p);
 
     Ui::MainWindow *ui;
     QTimer *timer = nullptr;
@@ -44,6 +48,8 @@ private:
     PlayerLogic player2Logic;
 
     GameState m_state = GameState::Menu;
+    QString   m_resultMsg;
+    int       m_tick = 0;
 
     bool p1Left=false,p1Right=false,p2Left=false,p2Right=false;
 
