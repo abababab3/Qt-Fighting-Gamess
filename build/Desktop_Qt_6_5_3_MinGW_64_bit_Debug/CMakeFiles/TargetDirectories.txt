@@ -1,0 +1,9 @@
+D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug/CMakeFiles/Qt-fighting-games.dir
+D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug/CMakeFiles/edit_cache.dir
+D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug/CMakeFiles/rebuild_cache.dir
+D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug/CMakeFiles/list_install_components.dir
+D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug/CMakeFiles/install.dir
+D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug/CMakeFiles/install/local.dir
+D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug/CMakeFiles/install/strip.dir
+D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug/CMakeFiles/Qt-fighting-games_autogen_timestamp_deps.dir
+D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug/CMakeFiles/Qt-fighting-games_autogen.dir

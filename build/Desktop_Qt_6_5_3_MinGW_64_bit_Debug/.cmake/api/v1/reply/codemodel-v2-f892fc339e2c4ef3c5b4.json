@@ -1,0 +1,79 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-Debug-51a94fd6bb9e33481189.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.16"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "Qt-fighting-games",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "Qt-fighting-games::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-Qt-fighting-games-Debug-b35b075b449619e80c3f.json",
+					"name" : "Qt-fighting-games",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "Qt-fighting-games_autogen::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-Qt-fighting-games_autogen-Debug-8253e91b7ceeba438eb2.json",
+					"name" : "Qt-fighting-games_autogen",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "Qt-fighting-games_autogen_timestamp_deps::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-Qt-fighting-games_autogen_timestamp_deps-Debug-3e18440f233121befa8e.json",
+					"name" : "Qt-fighting-games_autogen_timestamp_deps",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "D:/Qtttttt/Qt-fighting-games/build/Desktop_Qt_6_5_3_MinGW_64_bit_Debug",
+		"source" : "D:/Qtttttt/Qt-fighting-games"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 7
+	}
+}
