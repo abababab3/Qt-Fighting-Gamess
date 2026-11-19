@@ -22,6 +22,15 @@ target_link_libraries(Qt-fighting-games
         Qt::Widgets
 )
 
+qt_add_resources(Qt-fighting-games "app_resources"
+    PREFIX "/"
+    FILES
+        res/p1_ldle.png res/p1_walk.png res/p1_jump.png
+        res/p1_attack1.png res/p1_attack2.png res/p1_hurt.png
+        res/p2_ldle.png res/p2_walk.png res/p2_jump.png
+        res/p2_attack1.png res/p2_attack2.png res/p2_hurt.png
+)
+
 install(TARGETS Qt-fighting-games
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}

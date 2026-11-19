@@ -1,3 +1,12 @@
-".qtcreator"  
-"¹¹½¨/"  
-"build/" 
+.qtcreator/
+build/
+build-*/
+_backup/
+_backup_*/
+*.user
+*.user.*
+*_wtest.tmp
+*.tmp
+Thumbs.db
+desktop.ini
+.DS_Store

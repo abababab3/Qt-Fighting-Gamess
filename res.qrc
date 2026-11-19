@@ -1,0 +1,16 @@
+<RCC>
+    <qresource prefix="/">
+        <file>res/p1_ldle.png</file>
+        <file>res/p1_walk.png</file>
+        <file>res/p1_jump.png</file>
+        <file>res/p1_attack1.png</file>
+        <file>res/p1_attack2.png</file>
+        <file>res/p1_hurt.png</file>
+        <file>res/p2_ldle.png</file>
+        <file>res/p2_walk.png</file>
+        <file>res/p2_jump.png</file>
+        <file>res/p2_attack1.png</file>
+        <file>res/p2_attack2.png</file>
+        <file>res/p2_hurt.png</file>
+    </qresource>
+</RCC>
