@@ -39,8 +39,9 @@ ComputerPlayer::Movement ComputerPlayer::update(Fighter &fighter, const Fighter 
                            || opponent.state() == AnimState::Skill || opponent.state() == AnimState::Lunge
                            || opponent.state() == AnimState::Counter;
     if (!attacking) m_sawAttack = false;
-    // 举盾时也要面向玩家。原来越是举盾越不转身，玩家绕到背后电脑就站桩挨打，
-    // 和玩家侧"举盾锁朝向"是同一个毛病，两边都要修。
+    // 电脑没有方向键，它的"转身操作"就是这一行，所以举盾时也照常面向玩家。
+    // 玩家侧相反：举盾锁朝向，要自己按方向键转身——这是玩家该付的操作成本；
+    // 而 AI 若也不转身，绕到背后就能白嫖它，难度只会更低。
     if (offset != 0) fighter.setFacing(offset > 0);
 
     if (!m_sawAttack && attacking && qAbs(offset) < 145 && logic.canGuard()) {
