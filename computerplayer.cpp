@@ -2,14 +2,40 @@
 
 #include <QRandomGenerator>
 
-namespace {
-
-int reactionDelay()
+ComputerPlayer::Personality ComputerPlayer::personalityFor(HeroKind hero)
 {
-    return QRandomGenerator::global()->bounded(12, 23);
+    if (hero == HeroKind::HeroKnight) {
+        Personality knight;
+        // 反应更快，但更"稳"：优先用盾牌换机会，再用落雷拆盾、用反击惩罚冒进
+        knight.reactionMin = 10;
+        knight.reactionMax = 19;
+        knight.guardChance = 62;
+        knight.guardTicks = 34;
+        knight.reactRange = 150;
+        knight.counterRange = 96;        // 骑士反击 reach 70，比剑客长一截
+        knight.counterDelay = 3;
+        knight.jumpRange = 150;
+        knight.skillDivisor = 2;         // 落雷是核心拆盾手段，出得更勤
+        knight.guardBreakChance = 80;    // 对手一举盾就砸落雷（56 破盾，两发拆满）
+        knight.punishHurt = true;        // 盾碎 / 受击硬直期间立刻抢招
+        return knight;
+    }
+    // Martial Hero：以下数值与改造前完全一致
+    return Personality{};
 }
 
-} // namespace
+void ComputerPlayer::setHero(HeroKind hero)
+{
+    if (m_hero == hero) return;
+    m_hero = hero;
+    m_traits = personalityFor(hero);
+    reset();
+}
+
+int ComputerPlayer::reactionDelay() const
+{
+    return QRandomGenerator::global()->bounded(m_traits.reactionMin, m_traits.reactionMax);
+}
 
 void ComputerPlayer::reset()
 {
@@ -44,16 +70,18 @@ ComputerPlayer::Movement ComputerPlayer::update(Fighter &fighter, const Fighter 
     // 而 AI 若也不转身，绕到背后就能白嫖它，难度只会更低。
     if (offset != 0) fighter.setFacing(offset > 0);
 
-    if (!m_sawAttack && attacking && qAbs(offset) < 145 && logic.canGuard()) {
+    // ---- 防御反应：看到起手就举盾（骑士更愿意防，也防得更久）----
+    if (!m_sawAttack && attacking && qAbs(offset) < m_traits.reactRange && logic.canGuard()) {
         m_sawAttack = true;
-        if (QRandomGenerator::global()->bounded(100) < 40) {
-            m_guardTicks = 26;
+        if (QRandomGenerator::global()->bounded(100) < m_traits.guardChance) {
+            m_guardTicks = m_traits.guardTicks;
             logic.setGuardHeld(true);
         }
     }
     const bool targetInFront = fighter.facingRight ? offset > 0 : offset < 0;
-    if (logic.counterReadyTicks() <= PlayerLogic::CounterReadyTicks - 6 && targetInFront &&
-        qAbs(offset) <= 84 && qAbs(target.center().y() - fighter.getBodyBox().center().y()) < 40 &&
+    if (logic.counterReadyTicks() <= PlayerLogic::CounterReadyTicks - m_traits.counterDelay &&
+        targetInFront &&
+        qAbs(offset) <= m_traits.counterRange && qAbs(target.center().y() - fighter.getBodyBox().center().y()) < 40 &&
         logic.counter()) {
         m_ticksInRange = 0;
         return {};
@@ -68,15 +96,31 @@ ComputerPlayer::Movement ComputerPlayer::update(Fighter &fighter, const Fighter 
     const bool skillInRange = logic.canUseSkill()
                               && SkillEffect::spawn(logic.skill(), fighter).area.intersects(target);
     if (normalInRange || skillInRange) {
-        if (!logic.canAttack()) {
-            m_ticksInRange = 0;
-        } else if (++m_ticksInRange >= m_attackWait) {
-            const bool chooseSkill = skillInRange
-                                     && (!normalInRange || QRandomGenerator::global()->bounded(3) == 0);
-            if (chooseSkill) logic.useSkill();
-            else logic.attack();
+        // ---- 拆盾：对手举盾时，技能的高破盾值比平A划算得多 ----
+        // 剑客的剑气破盾 34 只是聊胜于无，骑士的落雷是 56（两发拆满），所以这条只给骑士开
+        if (opponent.state() == AnimState::Guard && skillInRange && m_traits.guardBreakChance > 0
+            && logic.canUseSkill()
+            && QRandomGenerator::global()->bounded(100) < m_traits.guardBreakChance) {
+            logic.useSkill();
             m_ticksInRange = 0;
             m_attackWait = reactionDelay();
+            return {};
+        }
+
+        if (!logic.canAttack()) {
+            m_ticksInRange = 0;
+        } else {
+            // 对手正在受击硬直里：骑士会跳过反应延迟直接抢招，把硬直吃满
+            const int wait = (m_traits.punishHurt && opponent.state() == AnimState::Hurt) ? 2 : m_attackWait;
+            if (++m_ticksInRange >= wait) {
+                const bool chooseSkill = skillInRange
+                                         && (!normalInRange
+                                             || QRandomGenerator::global()->bounded(m_traits.skillDivisor) == 0);
+                if (chooseSkill) logic.useSkill();
+                else logic.attack();
+                m_ticksInRange = 0;
+                m_attackWait = reactionDelay();
+            }
         }
         return {};
     }
@@ -85,11 +129,11 @@ ComputerPlayer::Movement ComputerPlayer::update(Fighter &fighter, const Fighter 
     const int approach = target.right() < attackBox.left() ? -1
                        : target.left() > attackBox.right() ? 1 : 0;
     const int elevation = fighter.getBodyBox().bottom() - target.bottom();
-    if (fighter.onGround && elevation > 26 && qAbs(offset) < 167 && m_jumpCooldown == 0) {
+    if (fighter.onGround && elevation > 26 && qAbs(offset) < m_traits.jumpRange && m_jumpCooldown == 0) {
         m_jumpCooldown = 38;
         return {approach, true};
     }
-    if (fighter.standingPlatform >= 0 && elevation < -32 && qAbs(offset) < 155)
+    if (fighter.standingPlatform >= 0 && elevation < -32 && qAbs(offset) < m_traits.jumpRange - 12)
         return {approach, false, true};
     if (approach != 0) return {approach, false};
     return {};

@@ -52,7 +52,8 @@ struct HealthBar {
 };
 
 void drawArena(QPainter &p, const Stage &stage);
-void drawMenu(QPainter &p, const Fighter &playerOne, const Fighter &playerTwo, const Stage &stage, bool adjustingVolume);
+void drawMenu(QPainter &p, const Fighter &playerOne, const Fighter &playerTwo, const Stage &stage,
+              bool adjustingVolume, const QString &playerOneName, const QString &playerTwoName);
 void drawHud(QPainter &p, const HealthBar &p1, const HealthBar &p2, int remainingMs, bool showMenuHint,
              const QString &opponentName);
 void drawTrainingHud(QPainter &p, const HealthBar &p1, const HealthBar &dummy, int lastDamage, int totalDamage, const QString &dummyName);
@@ -71,6 +72,8 @@ void drawHitSpark(QPainter &p, const QPoint &contact, qreal age);
 void drawSkillHitboxes(QPainter &p, const QRect &p1Skill, const QRect &p2Skill);
 void drawSkillStatus(QPainter &p, SkillKind p1, int p1Cooldown, SkillKind p2, int p2Cooldown);
 void drawRoundStart(QPainter &p, int countdown);
+// 角色头顶的身份标签：打电脑标 YOU，本地双人标 1P / 2P
+void drawPlayerTag(QPainter &p, const QRect &body, const QString &label, const QColor &color);
 void drawResult(QPainter &p, Winner winner, const QString &detail, const QString &opponentName);
 
 } // namespace GameUI

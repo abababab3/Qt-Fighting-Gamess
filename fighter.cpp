@@ -165,7 +165,13 @@ void Fighter::draw(QPainter &p) const
     p.save();
     p.translate(static_cast<int>(x), static_cast<int>(y + footGap(visual)));
     if (!facingRight) {
-        p.translate(w, 0);
+        // 精灵图里的角色没有在帧内水平居中（p1 偏左、p2 偏右各约 6px）。
+        // 若绕帧中心镜像，朝左时整张图会平移「两倍偏心量」（骑士约 11px），
+        // 而 getBodyBox() 是按未镜像的帧内包围盒算的 —— 贴图会和判定/影子/头顶标签错位。
+        // 改绕 Idle 帧包围盒中心镜像：两个朝向的贴图落在同一个身体位置上。
+        const QRect idleBox = m_bodyRect[static_cast<int>(AnimState::Idle)];
+        const int axis = idleBox.isValid() ? idleBox.center().x() : w / 2;
+        p.translate(axis * 2, 0);
         p.scale(-1, 1);
     }
 
