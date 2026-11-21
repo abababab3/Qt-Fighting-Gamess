@@ -8,6 +8,8 @@
 #include "computerplayer.h"
 #include "fighter.h"
 #include "gameui.h"
+#include "hero.h"
+#include "heroselectpanel.h"
 #include "keybindings.h"
 #include "playerlogic.h"
 
@@ -21,12 +23,16 @@ class MainWindow : public QWidget {
 public:
     explicit MainWindow(QWidget *parent = nullptr);
 
-    enum class GameState { Menu, Countdown, Playing, GameOver };
+    // HeroSelect：菜单与开局之间的覆盖面板，画在游戏画布里而不是独立窗口
+    enum class GameState { Menu, HeroSelect, Countdown, Playing, GameOver };
 
 protected:
     bool event(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
@@ -44,6 +50,14 @@ private:
     void clearMovement();
     void jump(Fighter &fighter, const char *soundAlias);
     void startMatch(MatchMode mode);
+    void openHeroPanel(HeroSelect::Mode mode);
+    void startComputerMatch();
+    void startLocalMatch();
+    void startTrainingMatch();
+    void confirmHeroSelection();
+    void stepBackHeroSelection();
+    void handleEscape();
+    void applyHeroes();
     void startRound();
     void returnToMenu();
     void checkWin();
@@ -51,6 +65,7 @@ private:
     Fighter &opponentFighter();
     QString opponentName() const;
     QRectF canvasRect() const;
+    QPointF gamePoint(const QPointF &widgetPos) const;
     void initSoundEffects();
     void initMusicControls();
     void initStageSelector();
@@ -86,6 +101,12 @@ private:
     GameUI::Winner m_winner = GameUI::Winner::Draw;
     QString m_resultDetail;
     MatchMode m_mode = MatchMode::Local;
+    // 玩家 1 与对手（电脑 / 玩家 2）各自选的角色。默认沿用改造前的组合：
+    // 左边 Martial Hero，右边 Hero Knight。
+    HeroKind m_p1Hero = HeroKind::MartialHero;
+    HeroKind m_p2Hero = HeroKind::HeroKnight;
+    // 覆盖式选择面板的临时状态（确认后才写回 m_p1Hero / m_p2Hero）
+    HeroSelect::Panel m_heroPanel;
     StageId m_stageId = StageId::Moonlit;
     QElapsedTimer m_roundClock;
     GameUI::HealthTrail m_p1HealthTrail;
@@ -112,7 +133,15 @@ private:
     HitSpark m_p2HitSpark;
     static constexpr int HitSparkTicks = 10;
 
+    // 顿帧（hitstop）：命中瞬间冻结双方逻辑若干帧，打击感的第一来源
+    int m_hitStopTicks = 0;
+    int m_shakeTicks = 0;
+    int m_shakeAmplitude = 0;
+    static constexpr int ShakeTicks = 6;
+
     bool p1Left = false, p1Right = false, p2Left = false, p2Right = false;
+    // 组合技：跳跃/快速下落键按住时按攻击键 -> 跃击/下劈
+    bool p1JumpHeld = false, p1FallHeld = false, p2JumpHeld = false, p2FallHeld = false;
 
     static constexpr double MOVE_SPD = 4.5;
     static constexpr double COMPUTER_MOVE_SPD = 3.5;

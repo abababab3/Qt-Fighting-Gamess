@@ -8,7 +8,7 @@
 
 // Attack = 第一组攻击(attack1)，Attack2 = 第二组攻击(attack2)
 // 每次按攻击键由 PlayerLogic 在两者间交替切换
-enum class AnimState { Idle, Walk, Jump, Attack, Attack2, Hurt, Guard, Skill, Lunge, Counter, Count };
+enum class AnimState { Idle, Walk, Jump, Attack, Attack2, Hurt, Guard, Skill, Lunge, Counter, AirSlash, DownSlash, Count };
 static constexpr int ANIM_STATE_COUNT = static_cast<int>(AnimState::Count);
 
 class Fighter {

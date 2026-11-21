@@ -105,13 +105,16 @@ AnimState Fighter::visualState() const
 void Fighter::updateAnimation() {
     const int i = static_cast<int>(visualState());
     if (m_frameCount[i] <= 1) return;
-    if (++m_tick >= FRAME_DELAY) {
+    // 跃击略微放慢(2倍)让横斩看得清，但不再拖沓；其余状态不变
+    const int delay = (m_state == AnimState::AirSlash) ? FRAME_DELAY * 2 : FRAME_DELAY;
+    if (++m_tick >= delay) {
         m_tick = 0;
         m_curFrame++;
         if (m_curFrame >= m_frameCount[i]) {
             // 两组攻击和 Hurt 播完停在末帧，其余循环
             if (m_state == AnimState::Attack || m_state == AnimState::Attack2
-                || m_state == AnimState::Hurt || m_state == AnimState::Skill || m_state == AnimState::Lunge || m_state == AnimState::Counter)
+                || m_state == AnimState::Hurt || m_state == AnimState::Skill || m_state == AnimState::Lunge || m_state == AnimState::Counter
+                || m_state == AnimState::AirSlash || m_state == AnimState::DownSlash)
                 m_curFrame = m_frameCount[i] - 1;
             else
                 m_curFrame = 0;
@@ -165,7 +168,13 @@ void Fighter::draw(QPainter &p) const
     p.save();
     p.translate(static_cast<int>(x), static_cast<int>(y + footGap(visual)));
     if (!facingRight) {
-        p.translate(w, 0);
+        // 精灵图里的角色没有在帧内水平居中（p1 偏左、p2 偏右各约 6px）。
+        // 若绕帧中心镜像，朝左时整张图会平移「两倍偏心量」（骑士约 11px），
+        // 而 getBodyBox() 是按未镜像的帧内包围盒算的 —— 贴图会和判定/影子/头顶标签错位。
+        // 改绕 Idle 帧包围盒中心镜像：两个朝向的贴图落在同一个身体位置上。
+        const QRect idleBox = m_bodyRect[static_cast<int>(AnimState::Idle)];
+        const int axis = idleBox.isValid() ? idleBox.center().x() : w / 2;
+        p.translate(axis * 2, 0);
         p.scale(-1, 1);
     }
 
@@ -235,18 +244,40 @@ QRect Fighter::getHitBox() const {
 }
 
 QRect Fighter::attackBox(AnimState attackState) const {
-    const QRect b = bodyBox(attackState);
-    // 挥刀/挥剑的横向幅度大，判定框加宽加高一点，命中更明显
+    // 下劈是自上而下的重斩：判定框锚在躯干前缘并向下延伸，覆盖砸地范围。
+    if (attackState == AnimState::DownSlash) {
+        const QRect torso = bodyBox(AnimState::Idle);
+        const QRect b = torso.isValid() ? torso : bodyBox(attackState);
+        const int w = 104;
+        const int left = facingRight ? b.center().x() - 8 : b.center().x() - w + 8;
+        return QRect(left, b.top() + b.height() / 4, w, b.height() * 5 / 4 + 20);
+    }
+    // 判定盒的"起点"必须锚在躯干上，不能用攻击帧的 alpha 包围盒。
+    // 挥剑帧的 bbox 里包含伸出去的剑，right() 比待机帧远 76px（P1：113→189），
+    // 起点跟着前移，判定框就跳过身前一大段，表现成"贴脸反而打不到"。
+    const QRect torso = bodyBox(AnimState::Idle);
+    const QRect b = torso.isValid() ? torso : bodyBox(attackState);
+    const int top = b.top() + b.height() / 8;
+    const int h = b.height() * 3 / 4;
+
+    // 剑尖实际能到多远：用攻击帧包围盒的前缘量出来，再留一点视觉余量。
+    // 判定范围 = [躯干前缘, max(基础距离, 剑尖)]，近身到剑尖之间没有空洞，
+    // 远端也不会超出剑太多（超出多少 = 这里的余量）。
     int reach = 75;
-    int top = b.top() + b.height() / 8;
-    int h = b.height() * 3 / 4;
+    const QRect blade = bodyBox(attackState);
+    if (blade.isValid()) {
+        const int origin = facingRight ? b.right() - 5 : b.left() + 5;
+        const int tip = facingRight ? blade.right() : blade.left();
+        reach = qMax(reach, qAbs(tip - origin) + 10);
+    }
     if (facingRight)
         return QRect(b.right() - 5, top, reach, h);
     return QRect(b.left() - reach + 5, top, reach, h);
 }
 
 bool Fighter::isAttackActive() const {
-    if (m_state != AnimState::Attack && m_state != AnimState::Attack2) return false;
+    if (m_state != AnimState::Attack && m_state != AnimState::Attack2
+        && m_state != AnimState::AirSlash && m_state != AnimState::DownSlash) return false;
     int i = static_cast<int>(m_state);
     if (m_frameCount[i] <= 1) return true;
     // 真正的出拳/踢腿在动画后半段（p1 是帧 4-5，p2 是帧 3-6）。

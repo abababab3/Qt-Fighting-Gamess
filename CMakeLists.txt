@@ -10,6 +10,8 @@ qt_add_executable(Qt-fighting-games
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    hero.h hero.cpp
+    heroselectpanel.h heroselectpanel.cpp
     fighter.h fighter.cpp
     gameui.h gameui.cpp
     playerlogic.h playerlogic.cpp
@@ -45,6 +47,8 @@ qt_add_resources(Qt-fighting-games "app_resources"
         res/p2_ldle.png res/p2_walk.png res/p2_jump.png
         res/p2_attack1.png res/p2_attack2.png res/p2_hurt.png
         res/p1_guard.png res/p2_guard.png res/lunge_poses.png
+        res/p1_airslash_sheet.png res/p1_downslash_sheet.png
+        res/p2_airslash_sheet.png res/p2_downslash_sheet.png
         audio/hit.wav audio/jump.wav audio/ko.wav audio/block.wav audio/parry.wav
         audio/music/menu.ogg audio/music/moonlit.ogg audio/music/bamboo.ogg audio/music/canyon.ogg
 )

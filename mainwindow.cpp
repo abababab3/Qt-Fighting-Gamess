@@ -8,7 +8,9 @@
 #include <QFile>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPushButton>
+#include <QRandomGenerator>
 #include <QResizeEvent>
 #include <QShortcut>
 #include <QSlider>
@@ -62,14 +64,16 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle(QStringLiteral("格斗竞技场"));
     setFocusPolicy(Qt::StrongFocus);
     setFocus();
+    // 选择面板是自绘的，要靠鼠标移动做悬停反馈
+    setMouseTracking(true);
 
     for (auto *button : {localButton, computerButton, trainingButton, keySettingsButton})
         button->setProperty("mode", true);
 
     computerButton->setAccessibleDescription(QStringLiteral("玩家 1 对战电脑"));
-    connect(localButton, &QPushButton::clicked, this, [this] { startMatch(MatchMode::Local); });
-    connect(computerButton, &QPushButton::clicked, this, [this] { startMatch(MatchMode::Computer); });
-    connect(trainingButton, &QPushButton::clicked, this, [this] { startMatch(MatchMode::Training); });
+    connect(localButton, &QPushButton::clicked, this, &MainWindow::startLocalMatch);
+    connect(computerButton, &QPushButton::clicked, this, &MainWindow::startComputerMatch);
+    connect(trainingButton, &QPushButton::clicked, this, &MainWindow::startTrainingMatch);
     connect(keySettingsButton, &QPushButton::clicked, this, &MainWindow::openKeySettings);
     connect(retryButton, &QPushButton::clicked, this, &MainWindow::startRound);
     connect(menuButton, &QPushButton::clicked, this, &MainWindow::returnToMenu);
@@ -77,31 +81,12 @@ MainWindow::MainWindow(QWidget *parent)
     auto *escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
     escape->setContext(Qt::WidgetWithChildrenShortcut);
     escape->setAutoRepeat(false);
-    connect(escape, &QShortcut::activated, this, &MainWindow::returnToMenu);
+    connect(escape, &QShortcut::activated, this, &MainWindow::handleEscape);
 
     player1Graphics.placeholderColor = Qt::darkRed;
     player2Graphics.placeholderColor = Qt::darkBlue;
 
-    player1Graphics.loadFrames(AnimState::Idle,    ":/res/p1_ldle.png",    8, 200, 200);
-    player1Graphics.loadFrames(AnimState::Walk,    ":/res/p1_walk.png",    8, 200, 200);
-    player1Graphics.loadFrames(AnimState::Jump,    ":/res/p1_jump.png",    2, 200, 200);
-    player1Graphics.loadFrames(AnimState::Attack,  ":/res/p1_attack1.png", 6, 200, 200);
-    player1Graphics.loadFrames(AnimState::Attack2, ":/res/p1_attack2.png", 6, 200, 200);
-    player1Graphics.loadFrames(AnimState::Hurt,    ":/res/p1_hurt.png",    4, 200, 200);
-
-    player2Graphics.loadFrames(AnimState::Idle,    ":/res/p2_ldle.png",    11, 180, 180);
-    player2Graphics.loadFrames(AnimState::Walk,    ":/res/p2_walk.png",     8, 180, 180);
-    player2Graphics.loadFrames(AnimState::Jump,    ":/res/p2_jump.png",     3, 180, 180);
-    player2Graphics.loadFrames(AnimState::Attack,  ":/res/p2_attack1.png",  7, 180, 180);
-    player2Graphics.loadFrames(AnimState::Attack2, ":/res/p2_attack2.png",  7, 180, 180);
-    player2Graphics.loadFrames(AnimState::Hurt,    ":/res/p2_hurt.png",     4, 180, 180);
-
-    player1Graphics.loadFrames(AnimState::Guard, ":/res/p1_guard.png", 1, 200, 200, 2);
-    player2Graphics.loadFrames(AnimState::Guard, ":/res/p2_guard.png", 1, 180, 180, 2);
-
-    const QPixmap lungeAtlas(QStringLiteral(":/res/lunge_poses.png"));
-    player1Graphics.loadLungePose(lungeAtlas, 0, 0.30);
-    player2Graphics.loadLungePose(lungeAtlas, 1, 0.35);
+    applyHeroes();
 
     initSoundEffects();
     initMusicControls();
@@ -222,6 +207,7 @@ void MainWindow::playSfx(const char *resName, const char *alias) {
 void MainWindow::clearMovement()
 {
     p1Left = p1Right = p2Left = p2Right = false;
+    p1JumpHeld = p1FallHeld = p2JumpHeld = p2FallHeld = false;
     m_p1Blink.clearTap();
     m_p2Blink.clearTap();
     m_p1Blink.clearFollowUp();
@@ -237,6 +223,102 @@ void MainWindow::jump(Fighter &fighter, const char *soundAlias)
     if (StagePhysics::jump(fighter)) playSfx("jump", soundAlias);
 }
 
+void MainWindow::applyHeroes()
+{
+    loadHeroAssets(player1Graphics, m_p1Hero);
+    loadHeroAssets(player2Graphics, m_p2Hero);
+}
+
+void MainWindow::openHeroPanel(HeroSelect::Mode mode)
+{
+    // 两步选择都画在画布里的覆盖面板上：先挑左边（1P / 玩家），再挑右边（电脑 / 2P）。
+    // 任何一步返回都留在菜单，不动当前的英雄配置。
+    m_heroPanel = HeroSelect::Panel{};
+    m_heroPanel.mode = mode;
+    m_heroPanel.step = 0;
+    m_heroPanel.hover = -1;
+    m_heroPanel.p1 = m_p1Hero;
+    m_heroPanel.p2 = m_p2Hero;
+    m_heroPanel.setCursorHero(m_p1Hero);
+
+    m_state = GameState::HeroSelect;
+    updateControls();
+    setFocus();
+    update();
+}
+
+void MainWindow::startComputerMatch()
+{
+    openHeroPanel(HeroSelect::Mode::VsComputer);
+}
+
+void MainWindow::startLocalMatch()
+{
+    openHeroPanel(HeroSelect::Mode::VsLocal);
+}
+
+void MainWindow::startTrainingMatch()
+{
+    // 木桩练习只要选自己用的角色，面板只有一步
+    openHeroPanel(HeroSelect::Mode::Training);
+}
+
+void MainWindow::confirmHeroSelection()
+{
+    const HeroKind picked = m_heroPanel.cursorHero();
+    if (m_heroPanel.singleStep()) {
+        // 木桩练习：只写回玩家角色，右边是人桩，没有对手英雄可选
+        m_heroPanel.p1 = picked;
+        m_p1Hero = picked;
+        applyHeroes();
+        startMatch(MatchMode::Training);
+        setFocus();
+        return;
+    }
+    if (!m_heroPanel.opponentStep()) {
+        m_heroPanel.p1 = picked;
+        m_heroPanel.step = 1;
+        // 后选的一方默认换成另一个角色，避免一进去就是镜像局（仍可手动改成同一个）
+        m_heroPanel.setCursorHero(picked == HeroKind::HeroKnight ? HeroKind::MartialHero
+                                                                 : HeroKind::HeroKnight);
+        m_heroPanel.p2 = m_heroPanel.cursorHero();
+        m_heroPanel.hover = -1;
+        update();
+        return;
+    }
+
+    m_heroPanel.p2 = picked;
+    m_p1Hero = m_heroPanel.p1;
+    m_p2Hero = m_heroPanel.p2;
+    applyHeroes();
+    const bool local = m_heroPanel.mode == HeroSelect::Mode::VsLocal;
+    if (!local) computerPlayer.setHero(m_p2Hero);
+    startMatch(local ? MatchMode::Local : MatchMode::Computer);
+    setFocus();
+}
+
+void MainWindow::stepBackHeroSelection()
+{
+    if (m_state != GameState::HeroSelect) return;
+    if (!m_heroPanel.opponentStep()) {
+        returnToMenu();
+        return;
+    }
+    m_heroPanel.step = 0;
+    m_heroPanel.setCursorHero(m_heroPanel.p1);
+    m_heroPanel.hover = -1;
+    update();
+}
+
+void MainWindow::handleEscape()
+{
+    if (m_state == GameState::HeroSelect) {
+        stepBackHeroSelection();
+        return;
+    }
+    returnToMenu();
+}
+
 void MainWindow::startMatch(MatchMode mode)
 {
     m_mode = mode;
@@ -247,25 +329,31 @@ void MainWindow::startMatch(MatchMode mode)
 void MainWindow::startRound()
 {
     const bool training = m_mode == MatchMode::Training;
+    // 起始高度必须跟着角色的帧尺寸走：200 帧的角色 y = GroundY-200 才刚好站在地面上
+    const int p1Frame = heroTraits(m_p1Hero).frameSize;
+    const int p2Frame = heroTraits(m_p2Hero).frameSize;
     if (training) {
         trainingDummy.reset(505, GameUI::GroundY + 1 - trainingDummy.getBodyBox().height());
         trainingDummy.onGround = true;
     } else {
-        player2Graphics.reset(600, GameUI::GroundY - 180);
+        player2Graphics.reset(600, GameUI::GroundY - p2Frame);
         player2Graphics.setFacing(false);
     }
 
     Fighter &opponent = opponentFighter();
-    player1Graphics.reset(training ? 210 : 100, GameUI::GroundY - 200);
+    player1Graphics.reset(training ? 210 : 100, GameUI::GroundY - p1Frame);
     player1Graphics.setFacing(true);
-    player1Logic = PlayerLogic(&player1Graphics, SkillKind::SwordWave);
-    player2Logic = PlayerLogic(&opponent, training ? SkillKind::None : SkillKind::Lightning);
+    player1Logic = PlayerLogic(&player1Graphics, heroTraits(m_p1Hero).skill);
+    player2Logic = PlayerLogic(&opponent, training ? SkillKind::None : heroTraits(m_p2Hero).skill);
     player2Logic.setGuardHeld(training && m_dummyMode == DummyMode::Guard);
     m_p1Blink = {};
     m_p2Blink = {};
     m_p1Skill = {};
     m_p2Skill = {};
-    if (m_mode == MatchMode::Computer) computerPlayer.reset();
+    if (m_mode == MatchMode::Computer) {
+        computerPlayer.setHero(m_p2Hero);
+        computerPlayer.reset();
+    }
     clearMovement();
 
     m_p1HealthTrail.reset(player1Graphics.hp);
@@ -277,6 +365,9 @@ void MainWindow::startRound()
     m_hitboxFlashTicks = 0;
     m_p1HitSpark = {};
     m_p2HitSpark = {};
+    m_hitStopTicks = 0;
+    m_shakeTicks = 0;
+    m_shakeAmplitude = 0;
     m_countdownLeft = COUNTDOWN_SECONDS;
     m_remainingMs = ROUND_SECONDS * 1000;
     m_roundClock.start();
@@ -298,6 +389,10 @@ void MainWindow::returnToMenu()
 
     clearMovement();
     m_state = GameState::Menu;
+    // 回菜单必须清掉顿帧/震动，否则会卡在边缘抖动
+    m_hitStopTicks = 0;
+    m_shakeTicks = 0;
+    m_shakeAmplitude = 0;
     backgroundMusic->playMenu();
     updateControls();
 }
@@ -343,6 +438,8 @@ void MainWindow::updateControls()
     retryButton->setVisible(m_state == GameState::GameOver);
     menuButton->setVisible(m_state == GameState::GameOver);
     m_adjustingVolume = false;
+    // 选择面板里鼠标是手型光标，离开面板要还原
+    if (m_state != GameState::HeroSelect) unsetCursor();
     if (inMenu) localButton->setFocus();
     else setFocus();
     update();
@@ -364,6 +461,64 @@ QRectF MainWindow::canvasRect() const
     QRectF area(0, 0, GameUI::Width * scale, GameUI::Height * scale);
     area.moveCenter(QPointF(width() / 2.0, height() / 2.0));
     return area;
+}
+
+// 把窗口坐标换算回画布坐标（paintEvent 里的 translate + scale 的逆运算）
+QPointF MainWindow::gamePoint(const QPointF &widgetPos) const
+{
+    const QRectF area = canvasRect();
+    const qreal scale = area.width() / GameUI::Width;
+    if (scale <= 0) return widgetPos;
+    return QPointF((widgetPos.x() - area.left()) / scale, (widgetPos.y() - area.top()) / scale);
+}
+
+void MainWindow::mousePressEvent(QMouseEvent *event)
+{
+    if (m_state == GameState::HeroSelect && event->button() == Qt::LeftButton) {
+        const int hit = HeroSelect::hitTest(gamePoint(event->position()));
+        if (hit == 0 || hit == 1) {
+            if (m_heroPanel.cursor == hit) confirmHeroSelection();  // 二次点击 = 确认
+            else {
+                m_heroPanel.cursor = hit;
+                m_heroPanel.hover = hit;
+                update();
+            }
+        } else if (hit == 2) {
+            stepBackHeroSelection();
+        } else if (hit == 3) {
+            confirmHeroSelection();
+        }
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void MainWindow::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    // 双击卡片 = 选中并直接确认，和原来弹窗里的习惯保持一致
+    if (m_state == GameState::HeroSelect && event->button() == Qt::LeftButton) {
+        const int hit = HeroSelect::hitTest(gamePoint(event->position()));
+        if (hit == 0 || hit == 1) {
+            m_heroPanel.cursor = hit;
+            confirmHeroSelection();
+        }
+        return;
+    }
+    QWidget::mouseDoubleClickEvent(event);
+}
+
+void MainWindow::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_state == GameState::HeroSelect) {
+        const int hit = HeroSelect::hitTest(gamePoint(event->position()));
+        if (hit != m_heroPanel.hover) {
+            m_heroPanel.hover = hit;
+            update();
+        }
+        setCursor(hit >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        return;
+    }
+    QWidget::mouseMoveEvent(event);
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
@@ -418,7 +573,8 @@ void MainWindow::gameLoop()
         return;
     }
 
-    if (m_state == GameState::Menu) return;
+    // 菜单与英雄选择面板都没有战斗逻辑要推进
+    if (m_state == GameState::Menu || m_state == GameState::HeroSelect) return;
 
     Fighter &opponent = opponentFighter();
     const bool hasHitFlash = player1Graphics.flashTicks > 0 || opponent.flashTicks > 0
@@ -436,6 +592,19 @@ void MainWindow::gameLoop()
     if (m_hitboxFlashTicks > 0) --m_hitboxFlashTicks;
     if (m_p1HitSpark.ticks > 0) --m_p1HitSpark.ticks;
     if (m_p2HitSpark.ticks > 0) --m_p2HitSpark.ticks;
+    // 震动计时独立递减：时长可能大于顿帧，必须自己走完，否则会永久抖动
+    if (m_shakeTicks > 0) {
+        --m_shakeTicks;
+        if (m_shakeTicks == 0) m_shakeAmplitude = 0;
+    }
+
+    // 顿帧：命中瞬间把整个战场冻住几帧。物理/逻辑/动画全部暂停，只重绘
+    if (m_hitStopTicks > 0) {
+        --m_hitStopTicks;
+        update();
+        return;
+    }
+
     if (m_state == GameState::GameOver) {
         const auto finishAnimation = [](Fighter &fighter, PlayerLogic &logic) {
             if (!logic.isPlayingAttack() && !logic.isCasting() && logic.perfectFlashTicks() == 0)
@@ -455,11 +624,21 @@ void MainWindow::gameLoop()
 
     const bool training = m_mode == MatchMode::Training;
     const auto moveHuman = [](Fighter &fighter, const PlayerLogic &logic, bool left, bool right) {
+        // 击退 / 破防硬直期间由逻辑接管速度，按键抢不回控制权
+        if (logic.overrideMovement(fighter)) return;
         if (logic.isLunging()) {
             fighter.vx = logic.lungeVelocity();
             return;
         }
-        const bool locked = fighter.hp <= 0 || logic.isGuarding() || logic.isCasting() || logic.isCountering();
+        // 举盾：锁走动，但方向键可以原地转身。
+        // 不做"自动面向对手"——转身是玩家自己的判断和操作成本，盾强在正面而不是无死角。
+        if (logic.isGuarding()) {
+            const int guardDir = static_cast<int>(right) - static_cast<int>(left);
+            if (fighter.hp > 0 && guardDir != 0) fighter.setFacing(guardDir > 0);
+            fighter.vx = 0;
+            return;
+        }
+        const bool locked = fighter.hp <= 0 || logic.isCasting() || logic.isCountering();
         const int direction = static_cast<int>(right) - static_cast<int>(left);
         if (!locked && direction != 0) fighter.setFacing(direction > 0);
         fighter.vx = locked ? 0 : direction * MOVE_SPD;
@@ -468,10 +647,14 @@ void MainWindow::gameLoop()
 
     if (m_mode == MatchMode::Computer) {
         const auto move = computerPlayer.update(opponent, player1Graphics, player2Logic);
-        opponent.vx = move.direction * COMPUTER_MOVE_SPD;
+        if (!player2Logic.overrideMovement(opponent))   // 电脑也会被打飞
+            opponent.vx = move.direction * COMPUTER_MOVE_SPD;
         if (move.jump) jump(opponent, "jumpalias2");
         if (move.fastFall) StagePhysics::fastFall(opponent);
     } else if (training) {
+        // 木桩不接击退：练连招时它必须站桩，否则打几下就被推出攻击范围
+        opponent.vx = 0;
+        player2Logic.clearKnockback();
         if (m_dummyMode != DummyMode::Idle && !player2Logic.isCommittedToAttack())
             opponent.setFacing(player1Graphics.getBodyBox().center().x() > opponent.getBodyBox().center().x());
         if (m_dummyMode == DummyMode::Attack && opponent.hp > 0) {
@@ -494,6 +677,16 @@ void MainWindow::gameLoop()
         if (result.damage > 0 || result.blocked) {
             m_lastHitBox = attack;
             m_hitboxFlashTicks = 10;
+
+            // 顿帧 + 震屏：按结果分配"重量"。格挡最轻，破防最重
+            int stopTicks = 4, shakeAmp = 3;
+            if (result.guardBroke)      { stopTicks = 8; shakeAmp = 5; }
+            else if (result.perfect)    { stopTicks = 3; shakeAmp = 2; }
+            else if (result.blocked)    { stopTicks = 2; shakeAmp = 1; }
+            m_hitStopTicks = qMax(m_hitStopTicks, stopTicks);
+            m_shakeTicks = qMax(m_shakeTicks, ShakeTicks);
+            m_shakeAmplitude = qMax(m_shakeAmplitude, shakeAmp);
+
             if (result.perfect) {
                 playSfx("parry", "parryalias");
             } else if (result.blocked) {
@@ -534,9 +727,19 @@ void MainWindow::gameLoop()
 
         const int sourceX = effect.kind == SkillKind::SwordWave ? body.center().x() - effect.direction
                                                                : attack.center().x();
-        const HitResult result = logic.receiveHit(skillSpec(effect.kind).damage, sourceX);
+        const HitResult result = logic.receiveHit(skillSpec(effect.kind).damage,
+                                                  skillSpec(effect.kind).guardDamage,
+                                                  sourceX,
+                                                  skillSpec(effect.kind).knockback);
         effect.markHit();
-        return showHit(attack, contact, result, fromP1);
+        const int dealt = showHit(attack, contact, result, fromP1);
+        // 技能是"大招"，命中反馈再加一档
+        if (result.damage > 0 && !result.blocked) {
+            m_hitStopTicks = qMax(m_hitStopTicks, 7);
+            m_shakeTicks = qMax(m_shakeTicks, ShakeTicks);
+            m_shakeAmplitude = qMax(m_shakeAmplitude, 4);
+        }
+        return dealt;
     };
     damage += resolveSkill(m_p1Skill, opponent, player2Logic, true);
     if (!training) resolveSkill(m_p2Skill, player1Graphics, player1Logic, false);
@@ -623,12 +826,27 @@ void MainWindow::drawScene(QPainter &p)
             GameUI::drawHitSpark(p, spark.position, 1.0 - qreal(spark.ticks) / HitSparkTicks);
     }
 
+    // 头顶身份标签：打电脑只标玩家自己（YOU），本地双人标 1P / 2P
+    if (m_mode == MatchMode::Computer) {
+        GameUI::drawPlayerTag(p, player1Graphics.getBodyBox(), QStringLiteral("YOU"),
+                              QColor("#ff5f52"));
+    } else if (m_mode == MatchMode::Local) {
+        GameUI::drawPlayerTag(p, player1Graphics.getBodyBox(), QStringLiteral("1P"),
+                              QColor("#ff5f52"));
+        GameUI::drawPlayerTag(p, opponent.getBodyBox(), QStringLiteral("2P"),
+                              QColor("#5aa8ff"));
+    }
+
     const bool finished = m_state == GameState::GameOver;
     const qint64 elapsed = m_roundClock.elapsed();
     const GameUI::HealthBar p1{player1Graphics.hp, player1Graphics.maxHp,
-                               finished ? player1Graphics.hp : m_p1HealthTrail.value(elapsed)};
+                               finished ? player1Graphics.hp : m_p1HealthTrail.value(elapsed),
+                               player1Logic.guardValue(), player1Logic.guardMax(),
+                               player1Logic.isGuardBroken(), player1Logic.guardBrokenTicks()};
     const GameUI::HealthBar p2{opponent.hp, opponent.maxHp,
-                               finished ? opponent.hp : m_p2HealthTrail.value(elapsed)};
+                               finished ? opponent.hp : m_p2HealthTrail.value(elapsed),
+                               player2Logic.guardValue(), player2Logic.guardMax(),
+                               player2Logic.isGuardBroken(), player2Logic.guardBrokenTicks()};
     if (training) {
         const QString name = m_dummyMode == DummyMode::Attack ? QStringLiteral("出招木桩")
                            : m_dummyMode == DummyMode::Guard ? QStringLiteral("防御木桩")
@@ -657,6 +875,15 @@ void MainWindow::drawScene(QPainter &p)
         GameUI::drawRoundStart(p, m_countdownLeft);
     else if (!training && elapsed < START_BANNER_MS)
         GameUI::drawRoundStart(p, 0);
+
+    // 破防瞬间白闪：只覆盖战场区域，HUD 始终保持清晰可读
+    const int breakFlash = qMax(player1Logic.guardBreakFlash(), player2Logic.guardBreakFlash());
+    if (breakFlash > 0) {
+        const qreal t = qreal(breakFlash) / PlayerLogic::GuardBreakFlashTicks;
+        QColor flash(255, 236, 226);
+        flash.setAlpha(qRound(105.0 * qMin(1.0, t * 2.2)));   // 前段保持、后段快收
+        p.fillRect(QRect(0, 112, GameUI::Width, GameUI::Height - 112), flash);
+    }
 }
 
 void MainWindow::paintEvent(QPaintEvent *)
@@ -668,12 +895,25 @@ void MainWindow::paintEvent(QPaintEvent *)
     painter.translate(area.topLeft());
     const qreal scale = area.width() / GameUI::Width;
     painter.scale(scale, scale);
+    // 屏幕震动：顿帧期间整体抖动，幅度随剩余帧数线性衰减
+    if (m_shakeTicks > 0 && m_shakeAmplitude > 0) {
+        const int amp = qMax(1, m_shakeAmplitude * m_shakeTicks / ShakeTicks);
+        painter.translate(QRandomGenerator::global()->bounded(-amp, amp + 1),
+                          QRandomGenerator::global()->bounded(-amp, amp + 1));
+    }
     painter.setClipRect(QRect(0, 0, GameUI::Width, GameUI::Height));
 
-    if (m_state == GameState::Menu)
-        GameUI::drawMenu(painter, player1Graphics, player2Graphics, stageFor(m_stageId), m_adjustingVolume);
-    else
+    if (m_state == GameState::Menu || m_state == GameState::HeroSelect) {
+        // 选择面板浮在菜单画面上：背景仍按当前已选英雄绘制，面板自己压暗
+        const bool picking = m_state == GameState::HeroSelect;
+        GameUI::drawMenu(painter, player1Graphics, player2Graphics, stageFor(m_stageId),
+                         m_adjustingVolume,
+                         heroName(picking ? m_heroPanel.p1 : m_p1Hero),
+                         heroName(picking ? m_heroPanel.p2 : m_p2Hero));
+        if (picking) HeroSelect::draw(painter, m_heroPanel);
+    } else {
         drawScene(painter);
+    }
 }
 
 std::array<QWidget *, 7> MainWindow::menuItems() const
@@ -781,15 +1021,20 @@ void MainWindow::applyControl(int player, ControlAction action, bool pressed)
     }
     case ControlAction::Guard: logic.setGuardHeld(pressed); break;
     case ControlAction::Jump:
+        (first ? p1JumpHeld : p2JumpHeld) = pressed;
         if (pressed && !logic.isGuarding() && !logic.isCasting() && !logic.isLunging() && !logic.isCountering())
             jump(fighter, first ? "jumpalias" : "jumpalias2");
         break;
     case ControlAction::FastFall:
+        (first ? p1FallHeld : p2FallHeld) = pressed;
         if (pressed && !logic.isGuarding() && !logic.isCasting() && !logic.isLunging() && !logic.isCountering())
             StagePhysics::fastFall(fighter);
         break;
     case ControlAction::Attack:
         if (!pressed) break;
+        // 组合技：按住跳跃键 -> 跃击；按住快速下落键 -> 下劈
+        if ((first ? p1JumpHeld : p2JumpHeld) && logic.airSlash()) { update(); break; }
+        if ((first ? p1FallHeld : p2FallHeld) && logic.downSlash()) { update(); break; }
         if (logic.counterReadyTicks() > 0) {
             if (logic.counter()) {
                 blink.clearFollowUp();
@@ -813,6 +1058,35 @@ void MainWindow::applyControl(int player, ControlAction action, bool pressed)
 
 void MainWindow::keyPressEvent(QKeyEvent *e)
 {
+    if (m_state == GameState::HeroSelect) {
+        if (e->isAutoRepeat()) return;
+        switch (e->key()) {
+        case Qt::Key_Left:
+        case Qt::Key_A:
+        case Qt::Key_Tab:
+            m_heroPanel.cursor = 0;
+            m_heroPanel.hover = -1;
+            update();
+            return;
+        case Qt::Key_Right:
+        case Qt::Key_D:
+            m_heroPanel.cursor = 1;
+            m_heroPanel.hover = -1;
+            update();
+            return;
+        case Qt::Key_Space:
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            confirmHeroSelection();
+            return;
+        case Qt::Key_Backspace:
+        case Qt::Key_Back:
+            stepBackHeroSelection();
+            return;
+        default:
+            return;
+        }
+    }
     if (m_state == GameState::Menu && handleMenuKey(e)) return;
     if (e->isAutoRepeat()) return;
     if (e->key() == Qt::Key_Escape) {

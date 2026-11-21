@@ -4,7 +4,10 @@
 #include "playerlogic.h"
 
 #include <QFont>
+#include <QFontMetricsF>
+#include <QHash>
 #include <QLinearGradient>
+#include <QPixmap>
 #include <QPainterPath>
 #include <QRadialGradient>
 #include <QPolygon>
@@ -114,6 +117,45 @@ void healthBar(QPainter &p, const QRect &track, const GameUI::HealthBar &health,
     p.restore();
 }
 
+// 护盾条：贴在血条下沿。低于 30% 转橙，破防时整条闪暗红并留出空槽。
+void guardBar(QPainter &p, const QRect &track, const GameUI::HealthBar &health, bool fromRight)
+{
+    if (health.guardMax <= 0) return;
+
+    p.save();
+    QPainterPath clip;
+    clip.addRoundedRect(track, 3, 3);
+    p.setClipPath(clip, Qt::IntersectClip);
+    p.fillRect(track, QColor("#1d1926"));
+
+    const qreal ratio = qBound(0.0, qreal(health.guard) / health.guardMax, 1.0);
+    const int width = qRound(track.width() * ratio);
+    const int x = fromRight ? track.x() + track.width() - width : track.x();
+
+    if (health.guardBroken) {
+        // 破防：槽位留空（深色底），只叠暗红斜纹裂纹——避免被误读成"满盾"
+        p.fillRect(track, QColor("#2b1b20"));
+        QColor crack("#c34a38");
+        crack.setAlpha(health.guardBrokenTicks % 8 < 4 ? 225 : 130);
+        p.setPen(QPen(crack, 2));
+        for (int gx = track.left() - track.height(); gx < track.right() + track.height(); gx += 7)
+            p.drawLine(gx, track.bottom() + 1, gx + track.height(), track.top() - 1);
+    } else if (width > 0) {
+        QColor core = ratio <= 0.3 ? QColor("#d9933f") : QColor("#68b6d9");
+        QLinearGradient gradient(track.topLeft(), track.bottomLeft());
+        gradient.setColorAt(0, core.lighter(122));
+        gradient.setColorAt(1, core.darker(116));
+        p.fillRect(QRect(x, track.y(), width, track.height()), gradient);
+        p.setPen(QColor(255, 255, 255, 80));
+        p.drawLine(x + 1, track.top() + 1, x + width - 2, track.top() + 1);
+    }
+    p.restore();
+
+    p.setPen(QPen(QColor("#4b3d4f"), 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(track, 3, 3);
+}
+
 void drawHealthCards(QPainter &p, const GameUI::HealthBar &p1, const GameUI::HealthBar &p2,
                      const QString &opponentName, const QColor &opponentColor)
 {
@@ -126,8 +168,10 @@ void drawHealthCards(QPainter &p, const GameUI::HealthBar &p1, const GameUI::Hea
     text(p, QRect(204, 29, 118, 34), QString::number(p1.hp), 26, Ink, true, Right);
     text(p, QRect(478, 29, 118, 34), QString::number(p2.hp), 26, Ink, true, Left);
     text(p, QRect(612, 31, 140, 30), opponentName, 18, opponentColor, true, Right);
-    healthBar(p, QRect(38, 68, 284, 17), p1, Red, true);
-    healthBar(p, QRect(478, 68, 284, 17), p2, opponentColor, false);
+    healthBar(p, QRect(38, 66, 284, 15), p1, Red, true);
+    healthBar(p, QRect(478, 66, 284, 15), p2, opponentColor, false);
+    guardBar(p, QRect(38, 85, 284, 7), p1, true);
+    guardBar(p, QRect(478, 85, 284, 7), p2, false);
 }
 
 void debugBox(QPainter &p, const QRect &box, QColor color, Qt::PenStyle style = Qt::SolidLine)
@@ -247,7 +291,8 @@ void drawArena(QPainter &p, const Stage &stage)
     p.drawLine(24, 537, Width - 24, 537);
 }
 
-void drawMenu(QPainter &p, const Fighter &playerOne, const Fighter &playerTwo, const Stage &stage, bool adjustingVolume)
+void drawMenu(QPainter &p, const Fighter &playerOne, const Fighter &playerTwo, const Stage &stage,
+              bool adjustingVolume, const QString &playerOneName, const QString &playerTwoName)
 {
     QLinearGradient background(0, 0, Width, Height);
     background.setColorAt(0, QColor("#171522"));
@@ -288,8 +333,8 @@ void drawMenu(QPainter &p, const Fighter &playerOne, const Fighter &playerTwo, c
     p.setPen(QColor("#80616a"));
     p.drawLine(382, 378, 748, 378);
     p.drawLine(565, 392, 565, 418);
-    text(p, QRect(393, 383, 168, 44), QStringLiteral("Martial Hero"), 18, Red, true);
-    text(p, QRect(570, 383, 168, 44), QStringLiteral("Hero Knight"), 18, Blue, true);
+    text(p, QRect(393, 383, 168, 44), playerOneName, 18, Red, true);
+    text(p, QRect(570, 383, 168, 44), playerTwoName, 18, Blue, true);
     p.restore();
     p.setPen(QColor("#907078"));
     p.setBrush(Qt::NoBrush);
@@ -737,6 +782,127 @@ void drawResult(QPainter &p, Winner winner, const QString &detail, const QString
     p.setPen(Border);
     p.drawLine(174, 316, 626, 316);
     text(p, QRect(169, 399, 462, 30), QStringLiteral("空格 再战   ·   Esc 返回主菜单"), 15, Muted);
+}
+
+namespace {
+
+// —— 头顶标签的点阵字 ——
+// 标签只有 YOU / 1P / 2P 三种，全是 ASCII，所以直接内置 5x7 点阵，
+// 不依赖系统字体。放大 2 倍后是硬边像素块，和游戏里手绘的美术风格一致。
+struct TagGlyph {
+    quint8 rows[7];
+};
+
+const TagGlyph *tagGlyph(QChar c)
+{
+    static const TagGlyph Y{{0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04}};
+    static const TagGlyph O{{0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}};
+    static const TagGlyph U{{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}};
+    static const TagGlyph One{{0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}};
+    static const TagGlyph Two{{0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}};
+    static const TagGlyph P{{0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10}};
+
+    switch (c.unicode()) {
+    case 'Y': return &Y;
+    case 'O': return &O;
+    case 'U': return &U;
+    case '1': return &One;
+    case '2': return &Two;
+    case 'P': return &P;
+    default: return nullptr;
+    }
+}
+
+constexpr int TagScale = 2;                     // 每个点阵像素放大 2 倍
+constexpr int TagGlyphW = 5;
+constexpr int TagGlyphH = 7;
+constexpr int TagAdvance = TagGlyphW + 1;       // 字间留 1 个点
+
+void blitTagGlyphs(QPainter &tp, const QString &label, int ox, int oy)
+{
+    for (int i = 0; i < label.size(); ++i) {
+        const TagGlyph *g = tagGlyph(label.at(i));
+        if (!g) continue;
+        for (int row = 0; row < TagGlyphH; ++row) {
+            for (int col = 0; col < TagGlyphW; ++col) {
+                if (g->rows[row] & (0x10u >> col))
+                    tp.drawRect(ox + (i * TagAdvance + col) * TagScale,
+                                oy + row * TagScale, TagScale, TagScale);
+            }
+        }
+    }
+}
+
+QPixmap renderTagPixmap(const QString &label, const QColor &color)
+{
+    const int textW = (label.size() * TagAdvance - 1) * TagScale;
+    const int textH = TagGlyphH * TagScale;
+    const int pad = TagScale;                   // 给描边留一圈
+
+    QPixmap pix(textW + pad * 2, textH + pad * 2);
+    pix.fill(Qt::transparent);
+
+    QPainter tp(&pix);
+    tp.setRenderHint(QPainter::Antialiasing, false);
+    tp.setPen(Qt::NoPen);
+
+    // 深色描边（8 邻域偏移）：让字在亮背景上也读得清，是点阵外描边不是外框
+    tp.setBrush(QColor(10, 8, 14, 205));
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            blitTagGlyphs(tp, label, pad + dx * TagScale, pad + dy * TagScale);
+        }
+    }
+    tp.setBrush(color);
+    blitTagGlyphs(tp, label, pad, pad);
+    return pix;
+}
+
+// 每帧都要画两次，位图缓存一下，避免反复拼方块
+const QPixmap &tagPixmap(const QString &label, const QColor &color)
+{
+    static QHash<QString, QPixmap> cache;
+    const QString key = label + QLatin1Char('|') + color.name();
+    auto it = cache.find(key);
+    if (it == cache.end())
+        it = cache.insert(key, renderTagPixmap(label, color));
+    return it.value();
+}
+
+} // namespace
+
+void drawPlayerTag(QPainter &p, const QRect &body, const QString &label, const QColor &color)
+{
+    if (body.isEmpty() || label.isEmpty()) return;
+
+    const QPixmap &pix = tagPixmap(label, color);
+    if (pix.isNull()) return;
+
+    const int arrowH = 6;
+    int x = body.center().x() - pix.width() / 2;
+    int y = body.top() - 7 - arrowH - (pix.height() - TagScale * 2) - TagScale;
+    x = qBound(2, x, Width - pix.width() - 2);   // 贴边时别跑出画面
+    y = qMax(2, y);
+
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, false);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+    p.setPen(Qt::NoPen);
+    p.drawPixmap(x, y, pix);
+
+    // 指向头顶的像素小箭头：用台阶方块拼，不用多边形，保持点阵观感
+    const int cx = qBound(4, body.center().x(), Width - 5);
+    const int ay = y + pix.height() - TagScale + 1;
+    auto arrow = [&](int dy, const QColor &fill) {
+        p.setBrush(fill);
+        p.drawRect(cx - 3, ay + dy, 6, 2);
+        p.drawRect(cx - 2, ay + dy + 2, 4, 2);
+        p.drawRect(cx - 1, ay + dy + 4, 2, 2);
+    };
+    arrow(1, QColor(10, 8, 14, 205));
+    arrow(0, color);
+    p.restore();
 }
 
 } // namespace GameUI
