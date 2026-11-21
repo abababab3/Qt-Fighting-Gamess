@@ -114,6 +114,45 @@ void healthBar(QPainter &p, const QRect &track, const GameUI::HealthBar &health,
     p.restore();
 }
 
+// 护盾条：贴在血条下沿。低于 30% 转橙，破防时整条闪暗红并留出空槽。
+void guardBar(QPainter &p, const QRect &track, const GameUI::HealthBar &health, bool fromRight)
+{
+    if (health.guardMax <= 0) return;
+
+    p.save();
+    QPainterPath clip;
+    clip.addRoundedRect(track, 3, 3);
+    p.setClipPath(clip, Qt::IntersectClip);
+    p.fillRect(track, QColor("#1d1926"));
+
+    const qreal ratio = qBound(0.0, qreal(health.guard) / health.guardMax, 1.0);
+    const int width = qRound(track.width() * ratio);
+    const int x = fromRight ? track.x() + track.width() - width : track.x();
+
+    if (health.guardBroken) {
+        // 破防：槽位留空（深色底），只叠暗红斜纹裂纹——避免被误读成"满盾"
+        p.fillRect(track, QColor("#2b1b20"));
+        QColor crack("#c34a38");
+        crack.setAlpha(health.guardBrokenTicks % 8 < 4 ? 225 : 130);
+        p.setPen(QPen(crack, 2));
+        for (int gx = track.left() - track.height(); gx < track.right() + track.height(); gx += 7)
+            p.drawLine(gx, track.bottom() + 1, gx + track.height(), track.top() - 1);
+    } else if (width > 0) {
+        QColor core = ratio <= 0.3 ? QColor("#d9933f") : QColor("#68b6d9");
+        QLinearGradient gradient(track.topLeft(), track.bottomLeft());
+        gradient.setColorAt(0, core.lighter(122));
+        gradient.setColorAt(1, core.darker(116));
+        p.fillRect(QRect(x, track.y(), width, track.height()), gradient);
+        p.setPen(QColor(255, 255, 255, 80));
+        p.drawLine(x + 1, track.top() + 1, x + width - 2, track.top() + 1);
+    }
+    p.restore();
+
+    p.setPen(QPen(QColor("#4b3d4f"), 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(track, 3, 3);
+}
+
 void drawHealthCards(QPainter &p, const GameUI::HealthBar &p1, const GameUI::HealthBar &p2,
                      const QString &opponentName, const QColor &opponentColor)
 {
@@ -126,8 +165,10 @@ void drawHealthCards(QPainter &p, const GameUI::HealthBar &p1, const GameUI::Hea
     text(p, QRect(204, 29, 118, 34), QString::number(p1.hp), 26, Ink, true, Right);
     text(p, QRect(478, 29, 118, 34), QString::number(p2.hp), 26, Ink, true, Left);
     text(p, QRect(612, 31, 140, 30), opponentName, 18, opponentColor, true, Right);
-    healthBar(p, QRect(38, 68, 284, 17), p1, Red, true);
-    healthBar(p, QRect(478, 68, 284, 17), p2, opponentColor, false);
+    healthBar(p, QRect(38, 66, 284, 15), p1, Red, true);
+    healthBar(p, QRect(478, 66, 284, 15), p2, opponentColor, false);
+    guardBar(p, QRect(38, 85, 284, 7), p1, true);
+    guardBar(p, QRect(478, 85, 284, 7), p2, false);
 }
 
 void debugBox(QPainter &p, const QRect &box, QColor color, Qt::PenStyle style = Qt::SolidLine)

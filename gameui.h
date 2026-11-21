@@ -44,6 +44,11 @@ struct HealthBar {
     int hp;
     int maxHp;
     qreal trailHp;
+    // 护盾（破防系统）：guardMax<=0 时不绘制护盾条
+    int guard = 0;
+    int guardMax = 0;
+    bool guardBroken = false;
+    int guardBrokenTicks = 0;
 };
 
 void drawArena(QPainter &p, const Stage &stage);

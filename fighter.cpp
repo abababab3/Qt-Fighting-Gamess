@@ -235,11 +235,24 @@ QRect Fighter::getHitBox() const {
 }
 
 QRect Fighter::attackBox(AnimState attackState) const {
-    const QRect b = bodyBox(attackState);
-    // 挥刀/挥剑的横向幅度大，判定框加宽加高一点，命中更明显
+    // 判定盒的"起点"必须锚在躯干上，不能用攻击帧的 alpha 包围盒。
+    // 挥剑帧的 bbox 里包含伸出去的剑，right() 比待机帧远 76px（P1：113→189），
+    // 起点跟着前移，判定框就跳过身前一大段，表现成"贴脸反而打不到"。
+    const QRect torso = bodyBox(AnimState::Idle);
+    const QRect b = torso.isValid() ? torso : bodyBox(attackState);
+    const int top = b.top() + b.height() / 8;
+    const int h = b.height() * 3 / 4;
+
+    // 剑尖实际能到多远：用攻击帧包围盒的前缘量出来，再留一点视觉余量。
+    // 判定范围 = [躯干前缘, max(基础距离, 剑尖)]，近身到剑尖之间没有空洞，
+    // 远端也不会超出剑太多（超出多少 = 这里的余量）。
     int reach = 75;
-    int top = b.top() + b.height() / 8;
-    int h = b.height() * 3 / 4;
+    const QRect blade = bodyBox(attackState);
+    if (blade.isValid()) {
+        const int origin = facingRight ? b.right() - 5 : b.left() + 5;
+        const int tip = facingRight ? blade.right() : blade.left();
+        reach = qMax(reach, qAbs(tip - origin) + 10);
+    }
     if (facingRight)
         return QRect(b.right() - 5, top, reach, h);
     return QRect(b.left() - reach + 5, top, reach, h);

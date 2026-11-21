@@ -112,6 +112,12 @@ private:
     HitSpark m_p2HitSpark;
     static constexpr int HitSparkTicks = 10;
 
+    // 顿帧（hitstop）：命中瞬间冻结双方逻辑若干帧，打击感的第一来源
+    int m_hitStopTicks = 0;
+    int m_shakeTicks = 0;
+    int m_shakeAmplitude = 0;
+    static constexpr int ShakeTicks = 6;
+
     bool p1Left = false, p1Right = false, p2Left = false, p2Right = false;
 
     static constexpr double MOVE_SPD = 4.5;

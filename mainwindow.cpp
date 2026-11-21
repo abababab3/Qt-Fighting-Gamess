@@ -9,6 +9,7 @@
 #include <QKeyEvent>
 #include <QMenu>
 #include <QPushButton>
+#include <QRandomGenerator>
 #include <QResizeEvent>
 #include <QShortcut>
 #include <QSlider>
@@ -277,6 +278,9 @@ void MainWindow::startRound()
     m_hitboxFlashTicks = 0;
     m_p1HitSpark = {};
     m_p2HitSpark = {};
+    m_hitStopTicks = 0;
+    m_shakeTicks = 0;
+    m_shakeAmplitude = 0;
     m_countdownLeft = COUNTDOWN_SECONDS;
     m_remainingMs = ROUND_SECONDS * 1000;
     m_roundClock.start();
@@ -298,6 +302,10 @@ void MainWindow::returnToMenu()
 
     clearMovement();
     m_state = GameState::Menu;
+    // 回菜单必须清掉顿帧/震动，否则会卡在边缘抖动
+    m_hitStopTicks = 0;
+    m_shakeTicks = 0;
+    m_shakeAmplitude = 0;
     backgroundMusic->playMenu();
     updateControls();
 }
@@ -436,6 +444,19 @@ void MainWindow::gameLoop()
     if (m_hitboxFlashTicks > 0) --m_hitboxFlashTicks;
     if (m_p1HitSpark.ticks > 0) --m_p1HitSpark.ticks;
     if (m_p2HitSpark.ticks > 0) --m_p2HitSpark.ticks;
+    // 震动计时独立递减：时长可能大于顿帧，必须自己走完，否则会永久抖动
+    if (m_shakeTicks > 0) {
+        --m_shakeTicks;
+        if (m_shakeTicks == 0) m_shakeAmplitude = 0;
+    }
+
+    // 顿帧：命中瞬间把整个战场冻住几帧。物理/逻辑/动画全部暂停，只重绘
+    if (m_hitStopTicks > 0) {
+        --m_hitStopTicks;
+        update();
+        return;
+    }
+
     if (m_state == GameState::GameOver) {
         const auto finishAnimation = [](Fighter &fighter, PlayerLogic &logic) {
             if (!logic.isPlayingAttack() && !logic.isCasting() && logic.perfectFlashTicks() == 0)
@@ -455,6 +476,8 @@ void MainWindow::gameLoop()
 
     const bool training = m_mode == MatchMode::Training;
     const auto moveHuman = [](Fighter &fighter, const PlayerLogic &logic, bool left, bool right) {
+        // 击退 / 破防硬直期间由逻辑接管速度，按键抢不回控制权
+        if (logic.overrideMovement(fighter)) return;
         if (logic.isLunging()) {
             fighter.vx = logic.lungeVelocity();
             return;
@@ -468,10 +491,14 @@ void MainWindow::gameLoop()
 
     if (m_mode == MatchMode::Computer) {
         const auto move = computerPlayer.update(opponent, player1Graphics, player2Logic);
-        opponent.vx = move.direction * COMPUTER_MOVE_SPD;
+        if (!player2Logic.overrideMovement(opponent))   // 电脑也会被打飞
+            opponent.vx = move.direction * COMPUTER_MOVE_SPD;
         if (move.jump) jump(opponent, "jumpalias2");
         if (move.fastFall) StagePhysics::fastFall(opponent);
     } else if (training) {
+        // 木桩不接击退：练连招时它必须站桩，否则打几下就被推出攻击范围
+        opponent.vx = 0;
+        player2Logic.clearKnockback();
         if (m_dummyMode != DummyMode::Idle && !player2Logic.isCommittedToAttack())
             opponent.setFacing(player1Graphics.getBodyBox().center().x() > opponent.getBodyBox().center().x());
         if (m_dummyMode == DummyMode::Attack && opponent.hp > 0) {
@@ -494,6 +521,16 @@ void MainWindow::gameLoop()
         if (result.damage > 0 || result.blocked) {
             m_lastHitBox = attack;
             m_hitboxFlashTicks = 10;
+
+            // 顿帧 + 震屏：按结果分配"重量"。格挡最轻，破防最重
+            int stopTicks = 4, shakeAmp = 3;
+            if (result.guardBroke)      { stopTicks = 8; shakeAmp = 5; }
+            else if (result.perfect)    { stopTicks = 3; shakeAmp = 2; }
+            else if (result.blocked)    { stopTicks = 2; shakeAmp = 1; }
+            m_hitStopTicks = qMax(m_hitStopTicks, stopTicks);
+            m_shakeTicks = qMax(m_shakeTicks, ShakeTicks);
+            m_shakeAmplitude = qMax(m_shakeAmplitude, shakeAmp);
+
             if (result.perfect) {
                 playSfx("parry", "parryalias");
             } else if (result.blocked) {
@@ -534,9 +571,19 @@ void MainWindow::gameLoop()
 
         const int sourceX = effect.kind == SkillKind::SwordWave ? body.center().x() - effect.direction
                                                                : attack.center().x();
-        const HitResult result = logic.receiveHit(skillSpec(effect.kind).damage, sourceX);
+        const HitResult result = logic.receiveHit(skillSpec(effect.kind).damage,
+                                                  skillSpec(effect.kind).guardDamage,
+                                                  sourceX,
+                                                  skillSpec(effect.kind).knockback);
         effect.markHit();
-        return showHit(attack, contact, result, fromP1);
+        const int dealt = showHit(attack, contact, result, fromP1);
+        // 技能是"大招"，命中反馈再加一档
+        if (result.damage > 0 && !result.blocked) {
+            m_hitStopTicks = qMax(m_hitStopTicks, 7);
+            m_shakeTicks = qMax(m_shakeTicks, ShakeTicks);
+            m_shakeAmplitude = qMax(m_shakeAmplitude, 4);
+        }
+        return dealt;
     };
     damage += resolveSkill(m_p1Skill, opponent, player2Logic, true);
     if (!training) resolveSkill(m_p2Skill, player1Graphics, player1Logic, false);
@@ -626,9 +673,13 @@ void MainWindow::drawScene(QPainter &p)
     const bool finished = m_state == GameState::GameOver;
     const qint64 elapsed = m_roundClock.elapsed();
     const GameUI::HealthBar p1{player1Graphics.hp, player1Graphics.maxHp,
-                               finished ? player1Graphics.hp : m_p1HealthTrail.value(elapsed)};
+                               finished ? player1Graphics.hp : m_p1HealthTrail.value(elapsed),
+                               player1Logic.guardValue(), player1Logic.guardMax(),
+                               player1Logic.isGuardBroken(), player1Logic.guardBrokenTicks()};
     const GameUI::HealthBar p2{opponent.hp, opponent.maxHp,
-                               finished ? opponent.hp : m_p2HealthTrail.value(elapsed)};
+                               finished ? opponent.hp : m_p2HealthTrail.value(elapsed),
+                               player2Logic.guardValue(), player2Logic.guardMax(),
+                               player2Logic.isGuardBroken(), player2Logic.guardBrokenTicks()};
     if (training) {
         const QString name = m_dummyMode == DummyMode::Attack ? QStringLiteral("出招木桩")
                            : m_dummyMode == DummyMode::Guard ? QStringLiteral("防御木桩")
@@ -657,6 +708,15 @@ void MainWindow::drawScene(QPainter &p)
         GameUI::drawRoundStart(p, m_countdownLeft);
     else if (!training && elapsed < START_BANNER_MS)
         GameUI::drawRoundStart(p, 0);
+
+    // 破防瞬间白闪：只覆盖战场区域，HUD 始终保持清晰可读
+    const int breakFlash = qMax(player1Logic.guardBreakFlash(), player2Logic.guardBreakFlash());
+    if (breakFlash > 0) {
+        const qreal t = qreal(breakFlash) / PlayerLogic::GuardBreakFlashTicks;
+        QColor flash(255, 236, 226);
+        flash.setAlpha(qRound(105.0 * qMin(1.0, t * 2.2)));   // 前段保持、后段快收
+        p.fillRect(QRect(0, 112, GameUI::Width, GameUI::Height - 112), flash);
+    }
 }
 
 void MainWindow::paintEvent(QPaintEvent *)
@@ -668,6 +728,12 @@ void MainWindow::paintEvent(QPaintEvent *)
     painter.translate(area.topLeft());
     const qreal scale = area.width() / GameUI::Width;
     painter.scale(scale, scale);
+    // 屏幕震动：顿帧期间整体抖动，幅度随剩余帧数线性衰减
+    if (m_shakeTicks > 0 && m_shakeAmplitude > 0) {
+        const int amp = qMax(1, m_shakeAmplitude * m_shakeTicks / ShakeTicks);
+        painter.translate(QRandomGenerator::global()->bounded(-amp, amp + 1),
+                          QRandomGenerator::global()->bounded(-amp, amp + 1));
+    }
     painter.setClipRect(QRect(0, 0, GameUI::Width, GameUI::Height));
 
     if (m_state == GameState::Menu)
