@@ -475,19 +475,31 @@ void MainWindow::gameLoop()
     }
 
     const bool training = m_mode == MatchMode::Training;
-    const auto moveHuman = [](Fighter &fighter, const PlayerLogic &logic, bool left, bool right) {
+    const auto moveHuman = [](Fighter &fighter, const PlayerLogic &logic, bool left, bool right,
+                              double opponentCenterX) {
         // 击退 / 破防硬直期间由逻辑接管速度，按键抢不回控制权
         if (logic.overrideMovement(fighter)) return;
         if (logic.isLunging()) {
             fighter.vx = logic.lungeVelocity();
             return;
         }
-        const bool locked = fighter.hp <= 0 || logic.isGuarding() || logic.isCasting() || logic.isCountering();
+        // 举盾：锁走动，但自动面向对手。
+        // 不这么做的话，对手只要绕过背后，盾就完全失效，而玩家连"转身应对"
+        // 的手段都没有（格挡锁移动、方向键也不改朝向）——这局等于无解。
+        if (logic.isGuarding()) {
+            const double selfX = fighter.getBodyBox().center().x();
+            if (qAbs(opponentCenterX - selfX) > 1.0)   // 完全重合时保持原朝向，避免抖动
+                fighter.setFacing(opponentCenterX > selfX);
+            fighter.vx = 0;
+            return;
+        }
+        const bool locked = fighter.hp <= 0 || logic.isCasting() || logic.isCountering();
         const int direction = static_cast<int>(right) - static_cast<int>(left);
         if (!locked && direction != 0) fighter.setFacing(direction > 0);
         fighter.vx = locked ? 0 : direction * MOVE_SPD;
     };
-    moveHuman(player1Graphics, player1Logic, p1Left, p1Right);
+    moveHuman(player1Graphics, player1Logic, p1Left, p1Right,
+              opponent.getBodyBox().center().x());
 
     if (m_mode == MatchMode::Computer) {
         const auto move = computerPlayer.update(opponent, player1Graphics, player2Logic);
@@ -507,7 +519,8 @@ void MainWindow::gameLoop()
                 m_dummyAttackDelay = DummyAttackInterval;
         }
     } else {
-        moveHuman(opponent, player2Logic, p2Left, p2Right);
+        moveHuman(opponent, player2Logic, p2Left, p2Right,
+                  player1Graphics.getBodyBox().center().x());
     }
 
     const Stage &stage = stageFor(m_stageId);
