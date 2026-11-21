@@ -10,6 +10,8 @@ qt_add_executable(Qt-fighting-games
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    hero.h hero.cpp
+    heroselectpanel.h heroselectpanel.cpp
     fighter.h fighter.cpp
     gameui.h gameui.cpp
     playerlogic.h playerlogic.cpp
