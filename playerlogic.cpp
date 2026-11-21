@@ -250,18 +250,19 @@ HitResult PlayerLogic::resolveHit(PlayerLogic &target)
     if (activeAttackBox().isEmpty() || !target.m_f || target.m_f->hp <= 0) return {};
 
     m_attackConnected = true;
-    int damage = isCountering() ? counterSpec(m_skill).damage
-                                : isLunging() ? lungeSpec(m_skill).damage : AttackDamage;
-    int guardDamage = isCountering() ? counterSpec(m_skill).guardDamage
-                                     : isLunging() ? lungeSpec(m_skill).guardDamage
-                                                   : AttackGuardDamage;
-    double knockback = isCountering() ? counterSpec(m_skill).knockback
-                                      : isLunging() ? lungeSpec(m_skill).knockback
-                                                    : AttackKnockback;
     // 跃击 / 下劈 = 重攻击，统一 10 点伤害（普攻 8）；破盾与击退略高于普攻。
-    if (m_f->state() == AnimState::AirSlash || m_f->state() == AnimState::DownSlash) {
-        damage = 10; guardDamage = 24; knockback = 4.6;
-    }
+    const bool heavy = (m_f->state() == AnimState::AirSlash || m_f->state() == AnimState::DownSlash);
+    const int damage = heavy ? 10
+                             : isCountering() ? counterSpec(m_skill).damage
+                                              : isLunging() ? lungeSpec(m_skill).damage : AttackDamage;
+    const int guardDamage = heavy ? 24
+                                  : isCountering() ? counterSpec(m_skill).guardDamage
+                                                   : isLunging() ? lungeSpec(m_skill).guardDamage
+                                                                 : AttackGuardDamage;
+    const double knockback = heavy ? 4.6
+                                   : isCountering() ? counterSpec(m_skill).knockback
+                                                    : isLunging() ? lungeSpec(m_skill).knockback
+                                                                  : AttackKnockback;
     return target.receiveHit(damage, guardDamage, m_f->getBodyBox().center().x(), knockback);
 }
 
