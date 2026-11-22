@@ -61,7 +61,8 @@ KeySettingsDialog::KeySettingsDialog(KeyBindings &bindings, QWidget *parent)
     m_message->setMinimumHeight(30);
     m_message->setWordWrap(true);
     grid->addWidget(m_message, Rows + 2, 0, 1, 3);
-    auto *fixedKeys = new QLabel(QStringLiteral("瞬身：双击移动键后按普攻。防反：命中前按格挡，成功后按普攻。\n"
+    auto *fixedKeys = new QLabel(QStringLiteral("瞬身：双击移动键后按普攻或技能。用强化技能会延长瞬身冷却。\n防反：命中前按格挡，成功后按普攻。\n"
+                                               "青篁：短按技能借风，长按技能纳风，松手释放。\n"
                                                "固定快捷键：Esc 返回 · M 静音 · F12 判定框 · R 重置练习 · T 切换木桩"), this);
     fixedKeys->setObjectName(QStringLiteral("note"));
     fixedKeys->setWordWrap(true);

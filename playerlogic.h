@@ -3,6 +3,9 @@
 
 #include "combatskill.h"
 #include "fighter.h"
+#include <QLine>
+
+struct Stage;
 
 struct HitResult {
     int damage = 0;
@@ -19,16 +22,33 @@ public:
     // Returns true on the tick that a skill effect should be created.
     bool update();
     bool attack();
-    bool airSlash();
-    bool downSlash();
+    NinjaShot takeNinjaShot();
     bool lunge(int direction);
     bool counter();
     QRect activeAttackBox() const;
     HitResult resolveHit(PlayerLogic &target);
     // guardDamage：这一招对护盾的削减量。<=0 时按 伤害×200% 兜底推导。
     // knockback：这一招的击退初速。<=0 时按 伤害 兜底推导。
-    HitResult receiveHit(int damage, int guardDamage, int sourceX, double knockback = 0);
-    bool useSkill();
+    HitResult receiveHit(int damage, int guardDamage, int sourceX, double knockback = 0, bool pull = false);
+    bool useSkill(bool enhanced = false, int direction = 0);
+    bool beginWindInput(bool enhanced, int direction);
+    void releaseWindInput();
+    void cancelWindInput();
+    bool isWindCharging() const { return m_windHoldTicks >= WindHoldThreshold; }
+    bool isWindChoosing() const { return m_windHoldTicks >= 0 && !isWindCharging(); }
+    bool windChargeEnhanced() const { return isWindCharging() && m_enhancedCast; }
+    bool windCaughtProjectile() const { return m_windCaught; }
+    QRect windCatchBox() const;
+    bool catchProjectile(const QRect &projectile, int direction);
+    bool takeWindBlinkCost();
+    SkillEffect takeWindGust();
+    bool isEnhancedCast() const { return m_enhancedCast; }
+    int skillCastTick() const { return m_castTick; }
+    int glideTicks() const { return m_glideTicks; }
+    int windNormalTick() const;
+    bool isWindAirNormal() const;
+    int windLungeReach() const;
+    QRect nextNormalAttackBox() const;
     void setGuardHeld(bool held);
 
     bool isGuarding() const;
@@ -40,7 +60,10 @@ public:
     // 受击后有一小段"被推走"的窗口，期间 vx 由惯性衰减控制，按键抢不回来。
     // 这是打击感里"卡一下→弹开"的后半截，也让连招需要主动追步。
     bool isKnockedBack() const { return m_knockTicks > 0; }
-    // 每帧在物理步进前调用。击退 / 破防硬直期间接管速度（惯性衰减），
+    bool canControlMovement() const;
+    bool jump();
+    void fastFall();
+    // 每帧在物理步进前调用。击退、受击或破防硬直期间接管水平速度，
     // 返回 true 表示本帧移动由逻辑接管，调用方不要再按输入改写 vx。
     bool overrideMovement(Fighter &fighter) const;
     void clearKnockback() { m_knockTicks = 0; }
@@ -69,6 +92,9 @@ public:
     bool isCountering() const { return m_f && m_attackTicks > 0 && m_f->state() == AnimState::Counter; }
     bool hasCounterArmor() const;
     int counterTick() const;
+    double counterVelocity() const;
+    void stepCounter(const Fighter &target, const Stage &stage);
+    const QLine &counterTrace() const { return m_counterTrace; }
     int counterReadyTicks() const { return m_counterReadyTicks; }
     int perfectFlashTicks() const { return m_perfectFlashTicks; }
     void clearCounterOpportunity();
@@ -79,6 +105,9 @@ public:
     bool canAttack() const;
     bool canUseSkill() const;
     bool canBlink() const;
+    void startBlinkInvulnerability();
+    void stepMovement(const Stage &stage);
+    bool isInvulnerable() const;
     SkillKind skill() const { return m_skill; }
     int skillCooldown() const { return m_skillCooldown; }
     static constexpr int CounterReadyTicks = 36;
@@ -86,6 +115,11 @@ public:
     AnimState nextAttackState() const { return m_useAttack2 ? AnimState::Attack2 : AnimState::Attack; }
 
 private:
+    bool isMovementStunned() const;
+    void updateWindInput();
+    void releaseWindGust();
+    bool canChangeElevation() const;
+    QRect windStrikeBox(int reach, bool downward) const;
     void updateStance();
     void applyDamage(int damage, int knockDir, double knockSpeed);
     void applyKnockback(int direction, double speed);
@@ -96,6 +130,10 @@ private:
     SkillKind m_skill = SkillKind::None;
     int m_attackCooldown = 0;
     int m_attackTicks = 0;
+    int m_blinkInvulnerabilityTicks = 0;
+    bool m_lungeMoved = false;
+    NinjaShot m_ninjaShot = NinjaShot::None;
+    int m_ninjaReleaseAt = 0;
     int m_hurtTicks = 0;
     int m_knockTicks = 0;
     int m_blockTicks = 0;
@@ -105,6 +143,16 @@ private:
     int m_perfectFlashTicks = 0;
     int m_skillCooldown = 0;
     int m_castTick = 0;
+    int m_glideTicks = 0;
+    int m_windHoldTicks = -1;
+    int m_windInputDirection = 0;
+    bool m_windInputEnhanced = false;
+    bool m_windCaught = false;
+    bool m_windBlinkCost = false;
+    SkillEffect m_pendingWindGust;
+    bool m_windAirNormal = false;
+    bool m_enhancedCast = false;
+    QLine m_counterTrace;
     int m_guard = GuardMax;
     int m_guardBrokenTicks = 0;
     int m_guardRegenCounter = 0;
@@ -114,6 +162,7 @@ private:
     bool m_useAttack2 = false;
     bool m_attackConnected = false;
 
+    static constexpr int BlinkInvulnerabilityTicks = 4;
     static constexpr int AttackCooldown = 24;
     static constexpr int AttackDamage = 8;
     static constexpr int HurtTicks = 12;

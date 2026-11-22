@@ -47,14 +47,13 @@ void ComputerPlayer::reset()
 }
 
 ComputerPlayer::Movement ComputerPlayer::update(Fighter &fighter, const Fighter &opponent,
-                                                PlayerLogic &logic)
+                                                PlayerLogic &logic, NinjaKit *ninja, const Stage *stage)
 {
     if (m_jumpCooldown > 0) --m_jumpCooldown;
     if (m_guardTicks > 0) --m_guardTicks;
     logic.setGuardHeld(m_guardTicks > 0);
 
-    const AnimState state = fighter.state();
-    if (logic.isCommittedToAttack() || state == AnimState::Hurt || logic.isCasting() || logic.isCountering()) {
+    if (!logic.canControlMovement() || logic.isCommittedToAttack()) {
         m_ticksInRange = 0;
         return {};
     }
@@ -91,10 +90,21 @@ ComputerPlayer::Movement ComputerPlayer::update(Fighter &fighter, const Fighter 
         return {};
     }
 
-    const QRect attackBox = fighter.attackBox(logic.nextAttackState());
-    const bool normalInRange = attackBox.intersects(target);
-    const bool skillInRange = logic.canUseSkill()
-                              && SkillEffect::spawn(logic.skill(), fighter).area.intersects(target);
+    if (ninja && stage && ninja->hasClone() && !ninja->echoPending() && qAbs(offset) < 90 &&
+        qAbs(ninja->cloneBox().center().x() - target.center().x()) > qAbs(offset) + 45 &&
+        logic.canBlink() && ninja->swap(fighter, *stage))
+        return {};
+
+    const QRect attackBox = logic.nextNormalAttackBox();
+    const bool aligned = qAbs(target.center().y() - fighter.getBodyBox().center().y()) < 34;
+    const bool normalInRange = ninja
+        ? aligned && qAbs(offset) < 330 && ninja->own.ticks == 0
+        : attackBox.intersects(target);
+    const bool skillInRange = logic.canUseSkill() && (ninja
+        ? !ninja->hasClone() && aligned && qAbs(offset) >= 115 && qAbs(offset) < 245
+        : logic.skill() == SkillKind::Wind
+          ? qAbs(offset) < 185 && target.bottom() < fighter.getBodyBox().bottom() - 24
+          : SkillEffect::spawn(logic.skill(), fighter).area.intersects(target));
     if (normalInRange || skillInRange) {
         // ---- 拆盾：对手举盾时，技能的高破盾值比平A划算得多 ----
         // 剑客的剑气破盾 34 只是聊胜于无，骑士的落雷是 56（两发拆满），所以这条只给骑士开
@@ -117,7 +127,7 @@ ComputerPlayer::Movement ComputerPlayer::update(Fighter &fighter, const Fighter 
                                          && (!normalInRange
                                              || QRandomGenerator::global()->bounded(m_traits.skillDivisor) == 0);
                 if (chooseSkill) logic.useSkill();
-                else logic.attack();
+                else if (logic.attack() && ninja) ninja->commitEcho(opponent, fighter.facingRight ? 1 : -1);
                 m_ticksInRange = 0;
                 m_attackWait = reactionDelay();
             }
@@ -126,9 +136,14 @@ ComputerPlayer::Movement ComputerPlayer::update(Fighter &fighter, const Fighter 
     }
 
     m_ticksInRange = 0;
+    if (ninja && qAbs(offset) < 110 && aligned && offset != 0)
+        return {offset > 0 ? -1 : 1, false};
+
     const int approach = target.right() < attackBox.left() ? -1
                        : target.left() > attackBox.right() ? 1 : 0;
     const int elevation = fighter.getBodyBox().bottom() - target.bottom();
+    if (logic.glideTicks() > 0 && elevation < -45 && qAbs(offset) < 105)
+        return {approach, false, true};
     if (fighter.onGround && elevation > 26 && qAbs(offset) < m_traits.jumpRange && m_jumpCooldown == 0) {
         m_jumpCooldown = 38;
         return {approach, true};

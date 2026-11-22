@@ -207,20 +207,22 @@ void MainWindow::playSfx(const char *resName, const char *alias) {
 void MainWindow::clearMovement()
 {
     p1Left = p1Right = p2Left = p2Right = false;
-    p1JumpHeld = p1FallHeld = p2JumpHeld = p2FallHeld = false;
     m_p1Blink.clearTap();
     m_p2Blink.clearTap();
+    m_bufferedCounters.fill(false);
     m_p1Blink.clearFollowUp();
     m_p2Blink.clearFollowUp();
     player1Logic.clearCounterOpportunity();
     player2Logic.clearCounterOpportunity();
+    player1Logic.cancelWindInput();
+    player2Logic.cancelWindInput();
     player1Logic.setGuardHeld(false);
     if (m_mode == MatchMode::Local) player2Logic.setGuardHeld(false);
 }
 
-void MainWindow::jump(Fighter &fighter, const char *soundAlias)
+void MainWindow::jump(PlayerLogic &logic, const char *soundAlias)
 {
-    if (StagePhysics::jump(fighter)) playSfx("jump", soundAlias);
+    if (logic.jump()) playSfx("jump", soundAlias);
 }
 
 void MainWindow::applyHeroes()
@@ -348,6 +350,8 @@ void MainWindow::startRound()
     player2Logic.setGuardHeld(training && m_dummyMode == DummyMode::Guard);
     m_p1Blink = {};
     m_p2Blink = {};
+    m_p1Ninja = {};
+    m_p2Ninja = {};
     m_p1Skill = {};
     m_p2Skill = {};
     if (m_mode == MatchMode::Computer) {
@@ -420,6 +424,8 @@ void MainWindow::checkWin()
     }
 
     clearMovement();
+    m_p1Ninja.disrupt(m_p1Ninja.cloneBox());
+    m_p2Ninja.disrupt(m_p2Ninja.cloneBox());
     m_state = GameState::GameOver;
     playSfx("ko", "koalias");
     updateControls();
@@ -476,16 +482,16 @@ void MainWindow::mousePressEvent(QMouseEvent *event)
 {
     if (m_state == GameState::HeroSelect && event->button() == Qt::LeftButton) {
         const int hit = HeroSelect::hitTest(gamePoint(event->position()));
-        if (hit == 0 || hit == 1) {
+        if (hit >= 0 && hit < HeroCount) {
             if (m_heroPanel.cursor == hit) confirmHeroSelection();  // 二次点击 = 确认
             else {
                 m_heroPanel.cursor = hit;
                 m_heroPanel.hover = hit;
                 update();
             }
-        } else if (hit == 2) {
+        } else if (hit == HeroSelect::CancelOption) {
             stepBackHeroSelection();
-        } else if (hit == 3) {
+        } else if (hit == HeroSelect::ConfirmOption) {
             confirmHeroSelection();
         }
         return;
@@ -498,7 +504,7 @@ void MainWindow::mouseDoubleClickEvent(QMouseEvent *event)
     // 双击卡片 = 选中并直接确认，和原来弹窗里的习惯保持一致
     if (m_state == GameState::HeroSelect && event->button() == Qt::LeftButton) {
         const int hit = HeroSelect::hitTest(gamePoint(event->position()));
-        if (hit == 0 || hit == 1) {
+        if (hit >= 0 && hit < HeroCount) {
             m_heroPanel.cursor = hit;
             confirmHeroSelection();
         }
@@ -607,7 +613,7 @@ void MainWindow::gameLoop()
 
     if (m_state == GameState::GameOver) {
         const auto finishAnimation = [](Fighter &fighter, PlayerLogic &logic) {
-            if (!logic.isPlayingAttack() && !logic.isCasting() && logic.perfectFlashTicks() == 0)
+            if (!logic.isPlayingAttack() && !logic.isCasting() && !logic.isInvulnerable() && logic.perfectFlashTicks() == 0)
                 return false;
             logic.update();
             fighter.updateAnimation();
@@ -615,42 +621,49 @@ void MainWindow::gameLoop()
         };
         const bool p1Animating = finishAnimation(player1Graphics, player1Logic);
         const bool p2Animating = finishAnimation(opponent, player2Logic);
-        const bool effectsVisible = m_p1Skill.lifetime > 0 || m_p2Skill.lifetime > 0;
+        const bool effectsVisible = m_p1Skill.lifetime > 0 || m_p2Skill.lifetime > 0
+                                    || m_p1Ninja.hasVisuals() || m_p2Ninja.hasVisuals();
+        m_p1Ninja.advance();
+        m_p2Ninja.advance();
         m_p1Skill.advance(0, GameUI::Width - 1);
         m_p2Skill.advance(0, GameUI::Width - 1);
         if (hasHitFlash || p1Animating || p2Animating || effectsVisible) update();
         return;
     }
 
+    for (int player = 0; player < static_cast<int>(m_bufferedCounters.size()); ++player) {
+        if (!m_bufferedCounters[player]) continue;
+        m_bufferedCounters[player] = false;
+        const PlayerLogic &logic = player == 0 ? player1Logic : player2Logic;
+        if (logic.counterReadyTicks() > 0) applyControl(player, ControlAction::Attack, true);
+    }
+
     const bool training = m_mode == MatchMode::Training;
-    const auto moveHuman = [](Fighter &fighter, const PlayerLogic &logic, bool left, bool right) {
-        // 击退 / 破防硬直期间由逻辑接管速度，按键抢不回控制权
+    const auto moveFighter = [](Fighter &fighter, const PlayerLogic &logic, int direction, double speed, bool turnWithInput = true) {
         if (logic.overrideMovement(fighter)) return;
-        if (logic.isLunging()) {
-            fighter.vx = logic.lungeVelocity();
+        if (logic.isLunging() || logic.isCountering()) {
+            fighter.vx = logic.isLunging() ? logic.lungeVelocity() : logic.counterVelocity();
             return;
         }
-        // 举盾：锁走动，但方向键可以原地转身。
-        // 不做"自动面向对手"——转身是玩家自己的判断和操作成本，盾强在正面而不是无死角。
-        if (logic.isGuarding()) {
-            const int guardDir = static_cast<int>(right) - static_cast<int>(left);
-            if (fighter.hp > 0 && guardDir != 0) fighter.setFacing(guardDir > 0);
+        if (!logic.canControlMovement()) {
             fighter.vx = 0;
             return;
         }
-        const bool locked = fighter.hp <= 0 || logic.isCasting() || logic.isCountering();
-        const int direction = static_cast<int>(right) - static_cast<int>(left);
-        if (!locked && direction != 0) fighter.setFacing(direction > 0);
-        fighter.vx = locked ? 0 : direction * MOVE_SPD;
+
+        // 举盾可以原地转身。
+        const bool throwing = logic.skill() == SkillKind::Shadow && logic.isCommittedToAttack();
+        if (turnWithInput && direction != 0 && !throwing) fighter.setFacing(direction > 0);
+        fighter.vx = logic.isGuarding() ? 0 : direction * speed;
     };
-    moveHuman(player1Graphics, player1Logic, p1Left, p1Right);
+    moveFighter(player1Graphics, player1Logic, p1Right - p1Left, MOVE_SPD);
 
     if (m_mode == MatchMode::Computer) {
-        const auto move = computerPlayer.update(opponent, player1Graphics, player2Logic);
-        if (!player2Logic.overrideMovement(opponent))   // 电脑也会被打飞
-            opponent.vx = move.direction * COMPUTER_MOVE_SPD;
-        if (move.jump) jump(opponent, "jumpalias2");
-        if (move.fastFall) StagePhysics::fastFall(opponent);
+        NinjaKit *kit = player2Logic.skill() == SkillKind::Shadow ? &m_p2Ninja : nullptr;
+        const Stage &stage = stageFor(m_stageId);
+        const auto move = computerPlayer.update(opponent, player1Graphics, player2Logic, kit, &stage);
+        moveFighter(opponent, player2Logic, move.direction, COMPUTER_MOVE_SPD, false);
+        if (move.jump) jump(player2Logic, "jumpalias2");
+        if (move.fastFall) player2Logic.fastFall();
     } else if (training) {
         // 木桩不接击退：练连招时它必须站桩，否则打几下就被推出攻击范围
         opponent.vx = 0;
@@ -663,17 +676,21 @@ void MainWindow::gameLoop()
                 m_dummyAttackDelay = DummyAttackInterval;
         }
     } else {
-        moveHuman(opponent, player2Logic, p2Left, p2Right);
+        moveFighter(opponent, player2Logic, p2Right - p2Left, MOVE_SPD);
     }
 
     const Stage &stage = stageFor(m_stageId);
-    StagePhysics::step(player1Graphics, stage);
-    if (!training) StagePhysics::step(opponent, stage);
+    player1Logic.stepMovement(stage);
+    if (!training || !opponent.onGround) player2Logic.stepMovement(stage);
     const bool releaseP1 = player1Logic.update();
     const bool releaseP2 = player2Logic.update();
+    if (player1Logic.takeWindBlinkCost()) m_p1Blink.extendSkillCooldown();
+    if (player2Logic.takeWindBlinkCost()) m_p2Blink.extendSkillCooldown();
+    player1Logic.stepCounter(opponent, stage);
+    if (!training) player2Logic.stepCounter(player1Graphics, stage);
 
     const auto showHit = [&](const QRect &attack, const QRect &contact,
-                             const HitResult &result, bool fromP1) {
+                             const HitResult &result, bool fromP1, bool counter = false) {
         if (result.damage > 0 || result.blocked) {
             m_lastHitBox = attack;
             m_hitboxFlashTicks = 10;
@@ -681,8 +698,9 @@ void MainWindow::gameLoop()
             // 顿帧 + 震屏：按结果分配"重量"。格挡最轻，破防最重
             int stopTicks = 4, shakeAmp = 3;
             if (result.guardBroke)      { stopTicks = 8; shakeAmp = 5; }
-            else if (result.perfect)    { stopTicks = 3; shakeAmp = 2; }
+            else if (result.perfect)    { stopTicks = 9; shakeAmp = 2; }
             else if (result.blocked)    { stopTicks = 2; shakeAmp = 1; }
+            else if (counter)           { stopTicks = 7; shakeAmp = 4; }
             m_hitStopTicks = qMax(m_hitStopTicks, stopTicks);
             m_shakeTicks = qMax(m_shakeTicks, ShakeTicks);
             m_shakeAmplitude = qMax(m_shakeAmplitude, shakeAmp);
@@ -703,9 +721,11 @@ void MainWindow::gameLoop()
     const auto resolveNormal = [&](const Fighter &target, PlayerLogic &attackerLogic,
                                    PlayerLogic &targetLogic, bool fromP1) {
         const QRect attack = attackerLogic.activeAttackBox();
+        (fromP1 ? m_p2Ninja : m_p1Ninja).disrupt(attack);
         const QRect contact = attack.intersected(target.getBodyBox());
         if (contact.isEmpty()) return 0;
-        return showHit(attack, contact, attackerLogic.resolveHit(targetLogic), fromP1);
+        const bool counter = attackerLogic.isCountering();
+        return showHit(attack, contact, attackerLogic.resolveHit(targetLogic), fromP1, counter);
     };
     int damage = resolveNormal(opponent, player1Logic, player2Logic, true);
     if (!training || m_dummyMode == DummyMode::Attack)
@@ -713,24 +733,46 @@ void MainWindow::gameLoop()
 
     m_p1Skill.advance(0, GameUI::Width - 1);
     m_p2Skill.advance(0, GameUI::Width - 1);
-    if (releaseP1 && player1Logic.isCasting())
-        m_p1Skill = SkillEffect::spawn(player1Logic.skill(), player1Graphics);
-    if (releaseP2 && player2Logic.isCasting())
-        m_p2Skill = SkillEffect::spawn(player2Logic.skill(), opponent);
+    m_p1Ninja.advance();
+    m_p2Ninja.advance();
+    const auto release = [](bool cast, PlayerLogic &logic, const Fighter &fighter,
+                            SkillEffect &effect, NinjaKit &ninja) {
+        if (cast && logic.isCasting()) {
+            if (logic.skill() == SkillKind::Shadow) ninja.placeClone(fighter);
+            else effect = SkillEffect::spawn(logic.skill(), fighter, logic.isEnhancedCast());
+        }
+        const SkillEffect gust = logic.takeWindGust();
+        if (gust.lifetime > 0) effect = gust;
+        const NinjaShot shot = logic.takeNinjaShot();
+        if (shot == NinjaShot::None) return;
+        if (shot == NinjaShot::Kunai && ninja.own.ticks > 0) return;
+        ninja.own = NinjaProjectile::launch(shot, fighter.getBodyBox(), fighter.facingRight ? 1 : -1);
+    };
+    release(releaseP1, player1Logic, player1Graphics, m_p1Skill, m_p1Ninja);
+    release(releaseP2, player2Logic, opponent, m_p2Skill, m_p2Ninja);
 
     const auto resolveSkill = [&](SkillEffect &effect, const Fighter &target,
                                   PlayerLogic &logic, bool fromP1) {
         const QRect attack = effect.hitBox();
+        if (effect.kind == SkillKind::SwordWave && logic.catchProjectile(attack, effect.direction)) {
+            effect.lifetime = 0;
+            playSfx("parry", "windcatch");
+            return 0;
+        }
+        (fromP1 ? m_p2Ninja : m_p1Ninja).disrupt(attack);
         const QRect body = target.getBodyBox();
         const QRect contact = attack.intersected(body);
-        if (target.hp <= 0 || contact.isEmpty()) return 0;
+        if (target.hp <= 0 || contact.isEmpty() || logic.isInvulnerable()) return 0;
 
-        const int sourceX = effect.kind == SkillKind::SwordWave ? body.center().x() - effect.direction
-                                                               : attack.center().x();
-        const HitResult result = logic.receiveHit(skillSpec(effect.kind).damage,
-                                                  skillSpec(effect.kind).guardDamage,
-                                                  sourceX,
-                                                  skillSpec(effect.kind).knockback);
+        const bool wind = effect.kind == SkillKind::Wind;
+        const int sourceX = (wind || effect.kind == SkillKind::SwordWave || effect.enhanced)
+                                ? body.center().x() - effect.direction : attack.center().x();
+        const auto skill = skillSpec(effect.kind, effect.enhanced);
+        const auto gust = windGustSpec(effect.wind);
+        const HitResult result = logic.receiveHit(wind ? gust.damage : skill.damage,
+                                                  wind ? gust.guardDamage : skill.guardDamage,
+                                                  sourceX, wind ? gust.force : skill.knockback,
+                                                  effect.wind == WindGust::Pull);
         effect.markHit();
         const int dealt = showHit(attack, contact, result, fromP1);
         // 技能是"大招"，命中反馈再加一档
@@ -743,6 +785,31 @@ void MainWindow::gameLoop()
     };
     damage += resolveSkill(m_p1Skill, opponent, player2Logic, true);
     if (!training) resolveSkill(m_p2Skill, player1Graphics, player1Logic, false);
+
+    const auto resolveNinja = [&](NinjaKit &kit, const Fighter &target, PlayerLogic &logic, bool fromP1) {
+        int total = 0;
+        for (NinjaProjectile *shot : {&kit.own, &kit.echo}) {
+            const QRect attack = shot->hitBox();
+            if (logic.catchProjectile(attack, shot->direction)) {
+                shot->ticks = 0;
+                playSfx("parry", "windcatch");
+                continue;
+            }
+            (fromP1 ? m_p2Ninja : m_p1Ninja).disrupt(attack);
+            const QRect body = target.getBodyBox();
+            const QRect contact = attack.intersected(body);
+            if (target.hp <= 0 || contact.isEmpty() || logic.isInvulnerable()) continue;
+            const auto spec = ninjaShotSpec(shot->kind);
+            const bool counter = shot->kind == NinjaShot::Counter;
+            const HitResult hit = logic.receiveHit(spec.damage, spec.guardDamage,
+                                                   body.center().x() - shot->direction, spec.knockback);
+            shot->ticks = 0;
+            total += showHit(attack, contact, hit, fromP1, counter);
+        }
+        return total;
+    };
+    damage += resolveNinja(m_p1Ninja, opponent, player2Logic, true);
+    if (!training) resolveNinja(m_p2Ninja, player1Graphics, player1Logic, false);
 
     player1Graphics.updateAnimation();
     opponent.updateAnimation();
@@ -799,22 +866,59 @@ void MainWindow::drawScene(QPainter &p)
     drawShadow(player1Graphics);
     drawShadow(opponent);
 
+    GameUI::drawNinjaKit(p, player1Graphics, m_p1Ninja);
+    if (!training) GameUI::drawNinjaKit(p, opponent, m_p2Ninja);
     GameUI::drawBlinkTrail(p, m_p1Blink, true);
     GameUI::drawBlinkTrail(p, m_p2Blink, false);
-    player1Graphics.draw(p);
+    GameUI::drawSkillWindup(p, player1Graphics, player1Logic);
+    GameUI::drawSkillWindup(p, opponent, player2Logic);
+    const auto drawFighter = [&](const Fighter &fighter, const PlayerLogic &logic) {
+        auto pose = Fighter::DrawPose::Current;
+        const SkillKind skill = logic.skill();
+        if (logic.isCountering()) {
+            const bool windup = logic.counterTick() <= counterSpec(skill).windup;
+            if (skill == SkillKind::Lightning) {
+                if (windup) pose = Fighter::DrawPose::Guard;
+            } else if (!windup && skill == SkillKind::SwordWave) {
+                pose = Fighter::DrawPose::Thrust;
+            }
+        } else if (skill == SkillKind::Lightning && logic.isCasting() &&
+                   logic.skillCastTick() <= skillSpec(skill, logic.isEnhancedCast()).startup) {
+            pose = Fighter::DrawPose::Guard;
+        }
+        if (skill == SkillKind::Wind) {
+            if (logic.isWindCharging() || logic.isCountering() || logic.windLungeReach() > 0) {
+                pose = Fighter::DrawPose::WindSweep;
+            } else if (const int tick = logic.windNormalTick(); tick >= 0) {
+                const auto spec = windNormalSpec(fighter.state() == AnimState::Attack2);
+                if (tick > spec.startup && tick <= spec.startup + spec.active)
+                    pose = logic.isWindAirNormal() ? Fighter::DrawPose::WindSweep : Fighter::DrawPose::WindStrike;
+            } else if (logic.isLunging())
+                pose = Fighter::DrawPose::Run;
+            else if (logic.glideTicks() > 0)
+                pose = Fighter::DrawPose::Glide;
+        }
+        p.save();
+        if (logic.isInvulnerable()) p.setOpacity(p.opacity() * 0.72);
+        fighter.draw(p, pose);
+        p.restore();
+    };
+    drawFighter(player1Graphics, player1Logic);
     if (training) {
         GameUI::drawTrainingDummy(p, opponent.getBodyBox(), opponent.hp,
                                   qreal(opponent.flashTicks) / Fighter::HitFlashTicks,
                                   opponent.facingRight, player2Logic.isCommittedToAttack(),
                                   player2Logic.activeAttackBox());
     } else {
-        opponent.draw(p);
+        drawFighter(opponent, player2Logic);
     }
 
     if (player1Logic.isLunging())
         GameUI::drawLungeEffect(p, player1Graphics, player1Logic.skill(), player1Logic.lungeTick());
     if (player2Logic.isLunging())
         GameUI::drawLungeEffect(p, opponent, player2Logic.skill(), player2Logic.lungeTick());
+    GameUI::drawWindEffects(p, player1Graphics, player1Logic);
+    GameUI::drawWindEffects(p, opponent, player2Logic);
     GameUI::drawSkillEffect(p, m_p1Skill);
     GameUI::drawSkillEffect(p, m_p2Skill);
     GameUI::drawGuardEffect(p, player1Graphics, player1Logic.isGuarding());
@@ -856,13 +960,25 @@ void MainWindow::drawScene(QPainter &p)
         GameUI::drawHud(p, p1, p2, m_remainingMs, !finished, opponentName());
     }
 
+    const auto enhancedSkill = [](const PlayerLogic &logic, const Blink &blink) {
+        return (blink.followUpTicks() > 0 && logic.skillCooldown() == 0)
+               || logic.windChargeEnhanced()
+               || ((logic.isCasting() || logic.glideTicks() > 0) && logic.isEnhancedCast());
+    };
     GameUI::drawSkillStatus(p, player1Logic.skill(), player1Logic.skillCooldown(),
-                           player2Logic.skill(), player2Logic.skillCooldown());
-    GameUI::drawBlinkStatus(p, m_p1Blink, m_p2Blink, m_mode == MatchMode::Local);
+                           player2Logic.skill(), player2Logic.skillCooldown(),
+                           enhancedSkill(player1Logic, m_p1Blink), enhancedSkill(player2Logic, m_p2Blink));
+    GameUI::drawBlinkStatus(p, m_p1Blink, m_p2Blink, player1Logic.skill(), player2Logic.skill(),
+                           m_mode == MatchMode::Local);
     GameUI::drawCounterStatus(p, player1Logic, player2Logic, !training);
+    GameUI::drawNinjaStatus(p, m_p1Ninja, m_p2Ninja);
+    GameUI::drawWindStatus(p, player1Logic, player2Logic);
 
     if (m_showHitboxes) {
         GameUI::drawSkillHitboxes(p, m_p1Skill.hitBox(), m_p2Skill.hitBox());
+        GameUI::drawSkillHitboxes(p, player1Logic.windCatchBox(), player2Logic.windCatchBox());
+        GameUI::drawSkillHitboxes(p, m_p1Ninja.own.hitBox(), m_p2Ninja.own.hitBox());
+        GameUI::drawSkillHitboxes(p, m_p1Ninja.echo.hitBox(), m_p2Ninja.echo.hitBox());
         GameUI::drawHitboxes(p, player1Graphics.hp > 0 ? player1Graphics.getBodyBox() : QRect(),
                              opponent.hp > 0 ? opponent.getBodyBox() : QRect(),
                              player1Logic.activeAttackBox(), player2Logic.activeAttackBox(),
@@ -1000,6 +1116,7 @@ void MainWindow::applyControl(int player, ControlAction action, bool pressed)
     Fighter &fighter = first ? player1Graphics : player2Graphics;
     PlayerLogic &logic = first ? player1Logic : player2Logic;
     Blink &blink = first ? m_p1Blink : m_p2Blink;
+    NinjaKit &ninja = first ? m_p1Ninja : m_p2Ninja;
     switch (action) {
     case ControlAction::Left:
     case ControlAction::Right: {
@@ -1012,8 +1129,9 @@ void MainWindow::applyControl(int player, ControlAction action, bool pressed)
         held = pressed;
         if (pressed) {
             const bool singleDirection = !(leftHeld && rightHeld);
-            if (blink.tap(right ? 1 : -1, m_roundClock.elapsed(), singleDirection && logic.canBlink(),
+            if (blink.tap(right ? 1 : -1, m_roundClock.elapsed(), singleDirection && m_hitStopTicks == 0 && logic.canBlink(),
                           fighter, stageFor(m_stageId))) {
+                logic.startBlinkInvulnerability();
                 update();
             }
         }
@@ -1021,21 +1139,18 @@ void MainWindow::applyControl(int player, ControlAction action, bool pressed)
     }
     case ControlAction::Guard: logic.setGuardHeld(pressed); break;
     case ControlAction::Jump:
-        (first ? p1JumpHeld : p2JumpHeld) = pressed;
-        if (pressed && !logic.isGuarding() && !logic.isCasting() && !logic.isLunging() && !logic.isCountering())
-            jump(fighter, first ? "jumpalias" : "jumpalias2");
+        if (pressed) jump(logic, first ? "jumpalias" : "jumpalias2");
         break;
     case ControlAction::FastFall:
-        (first ? p1FallHeld : p2FallHeld) = pressed;
-        if (pressed && !logic.isGuarding() && !logic.isCasting() && !logic.isLunging() && !logic.isCountering())
-            StagePhysics::fastFall(fighter);
+        if (pressed) logic.fastFall();
         break;
     case ControlAction::Attack:
         if (!pressed) break;
-        // 组合技：按住跳跃键 -> 跃击；按住快速下落键 -> 下劈
-        if ((first ? p1JumpHeld : p2JumpHeld) && logic.airSlash()) { update(); break; }
-        if ((first ? p1FallHeld : p2FallHeld) && logic.downSlash()) { update(); break; }
         if (logic.counterReadyTicks() > 0) {
+            if (m_hitStopTicks > 0) {
+                m_bufferedCounters[player] = true;
+                break;
+            }
             if (logic.counter()) {
                 blink.clearFollowUp();
                 update();
@@ -1046,11 +1161,47 @@ void MainWindow::applyControl(int player, ControlAction action, bool pressed)
                 update();
             }
         } else {
-            logic.attack();
+            if (logic.skill() != SkillKind::Shadow) {
+                logic.attack();
+            } else if (ninja.own.ticks == 0 && logic.attack()) {
+                const Fighter &target = first ? opponentFighter() : player1Graphics;
+                ninja.commitEcho(target, fighter.facingRight ? 1 : -1);
+            }
         }
         break;
     case ControlAction::Skill:
-        if (pressed) logic.useSkill();
+        if (logic.skill() == SkillKind::Wind) {
+            if (pressed) {
+                const bool enhanced = blink.followUpTicks() > 0;
+                if (logic.beginWindInput(enhanced, blink.followUpDirection()) && enhanced)
+                    blink.clearFollowUp();
+            } else {
+                logic.releaseWindInput();
+                if (logic.takeWindBlinkCost()) blink.extendSkillCooldown();
+            }
+            update();
+            break;
+        }
+        if (pressed) {
+            if (logic.skill() == SkillKind::Shadow && ninja.hasClone()) {
+                if (m_hitStopTicks == 0 && logic.canBlink() && ninja.swap(fighter, stageFor(m_stageId)))
+                    update();
+                break;
+            }
+
+            const bool enhanced = blink.followUpTicks() > 0;
+            if (logic.useSkill(enhanced, enhanced ? blink.followUpDirection() : 0)) {
+                if (logic.skill() == SkillKind::Shadow && enhanced) {
+                    QRect origin = fighter.getBodyBox();
+                    origin.moveCenter(blink.trailStart());
+                    ninja.planClone(origin);
+                }
+                if (enhanced) {
+                    blink.spendSkillFollowUp();
+                    update();
+                }
+            }
+        }
         break;
     default: break;
     }
@@ -1064,13 +1215,13 @@ void MainWindow::keyPressEvent(QKeyEvent *e)
         case Qt::Key_Left:
         case Qt::Key_A:
         case Qt::Key_Tab:
-            m_heroPanel.cursor = 0;
+            m_heroPanel.cursor = (m_heroPanel.cursor + HeroCount - 1) % HeroCount;
             m_heroPanel.hover = -1;
             update();
             return;
         case Qt::Key_Right:
         case Qt::Key_D:
-            m_heroPanel.cursor = 1;
+            m_heroPanel.cursor = (m_heroPanel.cursor + 1) % HeroCount;
             m_heroPanel.hover = -1;
             update();
             return;

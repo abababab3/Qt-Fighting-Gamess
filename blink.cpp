@@ -24,8 +24,22 @@ bool Blink::tap(int direction, qint64 now, bool allowed, Fighter &fighter, const
     m_trailEnd = fighter.getBodyBox().center();
     m_trailTicks = TrailTicks;
     m_followUpTicks = FollowUpTicks;
-    m_cooldown = CooldownTicks;
+    m_cooldown = m_cooldownLength = CooldownTicks;
     return true;
+}
+
+void Blink::spendSkillFollowUp()
+{
+    if (m_followUpTicks == 0) return;
+    clearFollowUp();
+    extendSkillCooldown();
+}
+
+void Blink::extendSkillCooldown()
+{
+    if (m_cooldown == 0 || m_cooldownLength != CooldownTicks) return;
+    m_cooldownLength = 2 * CooldownTicks;
+    m_cooldown += CooldownTicks;
 }
 
 void Blink::clearTap()

@@ -24,6 +24,33 @@ QRect opaqueBounds(const QImage &image, const QRect &region)
     return QRect(QPoint(left, top), QPoint(right, bottom));
 }
 
+QPixmap atlasPose(const QPixmap &source, const QImage &image, const QRect &cell, int height, int xOffset = 0)
+{
+    constexpr int frame = 180;
+    QPixmap pose(frame, frame);
+    pose.fill(Qt::transparent);
+    const QRect bounds = opaqueBounds(image, cell);
+    if (bounds.isEmpty()) return pose;
+
+    const auto sprite = source.copy(bounds).scaledToHeight(height, Qt::FastTransformation);
+    QPainter painter(&pose);
+    painter.drawPixmap(frame / 2 - sprite.width() / 2 + xOffset, 120 - height, sprite);
+    return pose;
+}
+
+QPixmap poseStrip(const QPixmap &idle, const QPixmap &action)
+{
+    const int frame = idle.width();
+    QPixmap strip(frame * 4, idle.height());
+    strip.fill(Qt::transparent);
+    QPainter painter(&strip);
+    painter.drawPixmap(0, 0, idle);
+    painter.drawPixmap(frame, 0, action);
+    painter.drawPixmap(frame * 2, 0, action);
+    painter.drawPixmap(frame * 3, 0, idle);
+    return strip;
+}
+
 } // namespace
 
 Fighter::Fighter(const QSize &bodySize)
@@ -34,7 +61,11 @@ Fighter::Fighter(const QSize &bodySize)
 
 bool Fighter::loadFrames(AnimState state, const QString &path,
                          int frameCount, int fw, int fh, int singleFrame) {
-    QPixmap sheet(path);
+    return loadFrames(state, QPixmap(path), frameCount, fw, fh, singleFrame);
+}
+
+bool Fighter::loadFrames(AnimState state, QPixmap sheet, int frameCount, int fw, int fh, int singleFrame)
+{
     if (sheet.isNull() || fw <= 0 || fh <= 0) return false;
     if (singleFrame >= 0) {
         const QRect frame(singleFrame * fw, 0, fw, fh);
@@ -75,6 +106,58 @@ bool Fighter::loadFrames(AnimState state, const QString &path,
     return true;
 }
 
+void Fighter::loadNinjaPoses(const QPixmap &atlas)
+{
+    if (atlas.isNull()) return;
+    m_fixedBody = true;
+    constexpr int frame = 180;
+    const QImage image = atlas.toImage().convertToFormat(QImage::Format_ARGB32);
+    // The throwing hand reaches a little past the nominal third quarter.
+    const int edges[]{0, atlas.width() * 23 / 100, atlas.width() * 49 / 100,
+                      atlas.width() * 79 / 100, atlas.width()};
+    QPixmap poses[4];
+    for (int i = 0; i < 4; ++i) {
+        const QRect cell(edges[i], 0, edges[i + 1] - edges[i], atlas.height());
+        const int height = i == 1 ? 47 : i == 3 ? 44 : 53;
+        poses[i] = atlasPose(atlas, image, cell, height, i == 2 ? 7 : 0);
+    }
+    const QPixmap toss = poseStrip(poses[0], poses[2]);
+    loadFrames(AnimState::Idle, poses[0], 1, frame, frame, -1);
+    loadFrames(AnimState::Walk, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Jump, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Attack, toss, 4, frame, frame, -1);
+    loadFrames(AnimState::Attack2, toss, 4, frame, frame, -1);
+    loadFrames(AnimState::Hurt, poses[3], 1, frame, frame, -1);
+    loadFrames(AnimState::Guard, poses[3], 1, frame, frame, -1);
+}
+
+void Fighter::loadWindPoses(const QPixmap &atlas)
+{
+    if (atlas.isNull()) return;
+    m_fixedBody = true;
+    constexpr int frame = 180;
+    const QImage image = atlas.toImage().convertToFormat(QImage::Format_ARGB32);
+    const int edges[]{0, 16, 36, 61, 80, 100};
+    const int heights[]{53, 48, 48, 71, 53};
+    const int offsets[]{0, 0, 9, 1, 8};
+    QPixmap poses[5];
+    for (int i = 0; i < 5; ++i) {
+        const int left = edges[i] * atlas.width() / 100;
+        const int right = edges[i + 1] * atlas.width() / 100;
+        poses[i] = atlasPose(atlas, image, QRect(left, 0, right - left, atlas.height()), heights[i], offsets[i]);
+    }
+
+    loadFrames(AnimState::Idle, poses[0], 1, frame, frame, -1);
+    loadFrames(AnimState::Walk, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Jump, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Attack, poseStrip(poses[0], poses[2]), 4, frame, frame, -1);
+    loadFrames(AnimState::Attack2, poseStrip(poses[0], poses[4]), 4, frame, frame, -1);
+    loadFrames(AnimState::Hurt, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Guard, poses[0], 1, frame, frame, -1);
+    loadFrames(AnimState::GlidePose, poses[3], 1, frame, frame, -1);
+    loadFrames(AnimState::SweepPose, poses[4], 1, frame, frame, -1);
+}
+
 void Fighter::loadLungePose(const QPixmap &atlas, int column, qreal anchor)
 {
     if (atlas.isNull()) return;
@@ -105,16 +188,13 @@ AnimState Fighter::visualState() const
 void Fighter::updateAnimation() {
     const int i = static_cast<int>(visualState());
     if (m_frameCount[i] <= 1) return;
-    // 跃击略微放慢(2倍)让横斩看得清，但不再拖沓；其余状态不变
-    const int delay = (m_state == AnimState::AirSlash) ? FRAME_DELAY * 2 : FRAME_DELAY;
-    if (++m_tick >= delay) {
+    if (++m_tick >= FRAME_DELAY) {
         m_tick = 0;
         m_curFrame++;
         if (m_curFrame >= m_frameCount[i]) {
             // 两组攻击和 Hurt 播完停在末帧，其余循环
             if (m_state == AnimState::Attack || m_state == AnimState::Attack2
-                || m_state == AnimState::Hurt || m_state == AnimState::Skill || m_state == AnimState::Lunge || m_state == AnimState::Counter
-                || m_state == AnimState::AirSlash || m_state == AnimState::DownSlash)
+                || m_state == AnimState::Hurt || m_state == AnimState::Skill || m_state == AnimState::Lunge || m_state == AnimState::Counter)
                 m_curFrame = m_frameCount[i] - 1;
             else
                 m_curFrame = 0;
@@ -129,9 +209,9 @@ int Fighter::footGap(AnimState state) const {
     return gap > 0 ? gap : 0;
 }
 
-void Fighter::draw(QPainter &p) const
+void Fighter::draw(QPainter &p, DrawPose pose) const
 {
-    if (m_state == AnimState::Lunge && !m_lungePose.isNull()) {
+    if ((m_state == AnimState::Lunge || pose == DrawPose::Thrust) && !m_lungePose.isNull()) {
         const QRect body = getBodyBox();
         const int height = qRound(body.height() * 0.91);
         const int width = qRound(qreal(m_lungePose.width()) * height / m_lungePose.height());
@@ -144,7 +224,15 @@ void Fighter::draw(QPainter &p) const
         return;
     }
 
-    const AnimState visual = visualState();
+    AnimState visual = visualState();
+    if (pose == DrawPose::Guard && getFrameCount(AnimState::Guard) > 0)
+        visual = AnimState::Guard;
+    else if (pose == DrawPose::Glide && getFrameCount(AnimState::GlidePose) > 0)
+        visual = AnimState::GlidePose;
+    else if (pose == DrawPose::WindSweep && getFrameCount(AnimState::SweepPose) > 0)
+        visual = AnimState::SweepPose;
+    else if (pose == DrawPose::Run && getFrameCount(AnimState::Walk) > 0)
+        visual = AnimState::Walk;
     const int i = static_cast<int>(visual);
     if (visual == AnimState::Guard) {
         const QRect body = getBodyBox();
@@ -179,7 +267,9 @@ void Fighter::draw(QPainter &p) const
     }
 
     if (!m_sheet[i].isNull() && m_frameCount[i] > 0) {
-        QRect src(m_curFrame * w, 0, w, h);
+        // The umbrella strike strip stores the extended weapon pose in its second frame.
+        const int frame = pose == DrawPose::WindStrike ? 1 : m_curFrame;
+        QRect src(qMin(frame, m_frameCount[i] - 1) * w, 0, w, h);
         src.setRight(qMin(src.right(), m_sheet[i].width() - 1));
         p.drawPixmap(target, m_sheet[i], src);
         if (flashTicks > 0) {
@@ -224,7 +314,7 @@ int Fighter::getFrameCount(AnimState s) const {
 }
 
 QRect Fighter::getBodyBox() const {
-    if (m_state == AnimState::Guard || m_state == AnimState::Skill || m_state == AnimState::Lunge || m_state == AnimState::Counter)
+    if (m_fixedBody || m_state == AnimState::Guard || m_state == AnimState::Skill || m_state == AnimState::Lunge || m_state == AnimState::Counter)
         return bodyBox(AnimState::Idle);
     return bodyBox(m_state);
 }
@@ -244,14 +334,6 @@ QRect Fighter::getHitBox() const {
 }
 
 QRect Fighter::attackBox(AnimState attackState) const {
-    // 下劈是自上而下的重斩：判定框锚在躯干前缘并向下延伸，覆盖砸地范围。
-    if (attackState == AnimState::DownSlash) {
-        const QRect torso = bodyBox(AnimState::Idle);
-        const QRect b = torso.isValid() ? torso : bodyBox(attackState);
-        const int w = 104;
-        const int left = facingRight ? b.center().x() - 8 : b.center().x() - w + 8;
-        return QRect(left, b.top() + b.height() / 4, w, b.height() * 5 / 4 + 20);
-    }
     // 判定盒的"起点"必须锚在躯干上，不能用攻击帧的 alpha 包围盒。
     // 挥剑帧的 bbox 里包含伸出去的剑，right() 比待机帧远 76px（P1：113→189），
     // 起点跟着前移，判定框就跳过身前一大段，表现成"贴脸反而打不到"。
@@ -276,8 +358,7 @@ QRect Fighter::attackBox(AnimState attackState) const {
 }
 
 bool Fighter::isAttackActive() const {
-    if (m_state != AnimState::Attack && m_state != AnimState::Attack2
-        && m_state != AnimState::AirSlash && m_state != AnimState::DownSlash) return false;
+    if (m_state != AnimState::Attack && m_state != AnimState::Attack2) return false;
     int i = static_cast<int>(m_state);
     if (m_frameCount[i] <= 1) return true;
     // 真正的出拳/踢腿在动画后半段（p1 是帧 4-5，p2 是帧 3-6）。

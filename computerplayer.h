@@ -2,6 +2,7 @@
 #define COMPUTERPLAYER_H
 
 #include "hero.h"
+#include "ninja.h"
 #include "playerlogic.h"
 
 class ComputerPlayer {
@@ -32,7 +33,8 @@ public:
 
     void setHero(HeroKind hero);
     void reset();
-    Movement update(Fighter &fighter, const Fighter &opponent, PlayerLogic &logic);
+    Movement update(Fighter &fighter, const Fighter &opponent, PlayerLogic &logic,
+                    NinjaKit *ninja = nullptr, const Stage *stage = nullptr);
 
 private:
     int reactionDelay() const;
