@@ -8,7 +8,7 @@
 
 // Attack = 第一组攻击(attack1)，Attack2 = 第二组攻击(attack2)
 // 每次按攻击键由 PlayerLogic 在两者间交替切换
-enum class AnimState { Idle, Walk, Jump, Attack, Attack2, Hurt, Guard, Skill, Lunge, Counter, Count };
+enum class AnimState { Idle, Walk, Jump, Attack, Attack2, Hurt, Guard, Skill, Lunge, Counter, GlidePose, SweepPose, Count };
 static constexpr int ANIM_STATE_COUNT = static_cast<int>(AnimState::Count);
 
 class Fighter {
@@ -18,11 +18,14 @@ public:
 
     bool loadFrames(AnimState state, const QString &path,
                     int frameCount, int fw, int fh, int singleFrame = -1);
+    void loadNinjaPoses(const QPixmap &atlas);
+    void loadWindPoses(const QPixmap &atlas);
     void loadLungePose(const QPixmap &atlas, int column, qreal anchor);
     void setState(AnimState s);
     AnimState state() const { return m_state; }   // 只读查询当前动画状态
     void updateAnimation();
-    void draw(QPainter &p) const;
+    enum class DrawPose { Current, Guard, Thrust, Glide, WindSweep, WindStrike, Run };
+    void draw(QPainter &p, DrawPose pose = DrawPose::Current) const;
     void drawIdlePortrait(QPainter &p, const QRect &area, bool faceRight) const;
 
     // ---- 数据 ----
@@ -57,6 +60,8 @@ private:
     int footGap(AnimState state) const;
     AnimState visualState() const;
 
+    bool loadFrames(AnimState state, QPixmap sheet, int frameCount, int fw, int fh, int singleFrame);
+    bool m_fixedBody = false;
     QPixmap m_lungePose;
     qreal m_lungeAnchor = 0.5;
     QPixmap m_sheet[ANIM_STATE_COUNT];

@@ -7,6 +7,7 @@
 #include "stage.h"
 
 class Blink;
+class NinjaKit;
 class Fighter;
 class PlayerLogic;
 
@@ -62,15 +63,22 @@ void drawTrainingDummy(QPainter &p, const QRect &body, int health, qreal flash,
 void drawHitboxes(QPainter &p, const QRect &p1Body, const QRect &p2Body,
                   const QRect &p1Attack, const QRect &p2Attack, const QRect &lastHit);
 void drawBlinkTrail(QPainter &p, const Blink &blink, bool firstPlayer);
-void drawBlinkStatus(QPainter &p, const Blink &p1, const Blink &p2, bool showP2);
+void drawBlinkStatus(QPainter &p, const Blink &p1, const Blink &p2,
+                     SkillKind p1Skill, SkillKind p2Skill, bool showP2);
 void drawLungeEffect(QPainter &p, const Fighter &fighter, SkillKind kind, int elapsed);
 void drawGuardEffect(QPainter &p, const Fighter &fighter, bool guarding);
 void drawCounterEffects(QPainter &p, const Fighter &fighter, const PlayerLogic &logic);
 void drawCounterStatus(QPainter &p, const PlayerLogic &p1, const PlayerLogic &p2, bool showP2);
+void drawNinjaKit(QPainter &p, const Fighter &fighter, const NinjaKit &kit);
+void drawNinjaStatus(QPainter &p, const NinjaKit &p1, const NinjaKit &p2);
+void drawWindEffects(QPainter &p, const Fighter &fighter, const PlayerLogic &logic);
+void drawWindStatus(QPainter &p, const PlayerLogic &p1, const PlayerLogic &p2);
+void drawSkillWindup(QPainter &p, const Fighter &fighter, const PlayerLogic &logic);
 void drawSkillEffect(QPainter &p, const SkillEffect &effect);
 void drawHitSpark(QPainter &p, const QPoint &contact, qreal age);
 void drawSkillHitboxes(QPainter &p, const QRect &p1Skill, const QRect &p2Skill);
-void drawSkillStatus(QPainter &p, SkillKind p1, int p1Cooldown, SkillKind p2, int p2Cooldown);
+void drawSkillStatus(QPainter &p, SkillKind p1, int p1Cooldown, SkillKind p2, int p2Cooldown,
+                     bool enhancedP1, bool enhancedP2);
 void drawRoundStart(QPainter &p, int countdown);
 // 角色头顶的身份标签：打电脑标 YOU，本地双人标 1P / 2P
 void drawPlayerTag(QPainter &p, const QRect &body, const QString &label, const QColor &color);

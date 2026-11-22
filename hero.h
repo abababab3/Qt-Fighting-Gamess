@@ -13,7 +13,8 @@ class Fighter;
 //   2. 技能系（决定技能/突进/反击的数值表）
 //   3. 突进图集的列号与锚点
 // 所以「换角色」本质是把这三样重新灌进一个 Fighter + PlayerLogic。
-enum class HeroKind { MartialHero, HeroKnight };
+enum class HeroKind { MartialHero, HeroKnight, Ninja, WindParasol };
+inline constexpr int HeroCount = 4;
 
 struct HeroTraits {
     SkillKind skill;
@@ -25,6 +26,7 @@ struct HeroTraits {
 };
 
 const HeroTraits &heroTraits(HeroKind kind);
+HeroKind heroForSkill(SkillKind skill);
 QString heroName(HeroKind kind);
 QString heroSkillName(HeroKind kind);   // 技能名（落雷 / 剑气）
 QString heroCounterName(HeroKind kind); // 完美格挡后的反击技名

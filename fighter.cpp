@@ -24,6 +24,33 @@ QRect opaqueBounds(const QImage &image, const QRect &region)
     return QRect(QPoint(left, top), QPoint(right, bottom));
 }
 
+QPixmap atlasPose(const QPixmap &source, const QImage &image, const QRect &cell, int height, int xOffset = 0)
+{
+    constexpr int frame = 180;
+    QPixmap pose(frame, frame);
+    pose.fill(Qt::transparent);
+    const QRect bounds = opaqueBounds(image, cell);
+    if (bounds.isEmpty()) return pose;
+
+    const auto sprite = source.copy(bounds).scaledToHeight(height, Qt::FastTransformation);
+    QPainter painter(&pose);
+    painter.drawPixmap(frame / 2 - sprite.width() / 2 + xOffset, 120 - height, sprite);
+    return pose;
+}
+
+QPixmap poseStrip(const QPixmap &idle, const QPixmap &action)
+{
+    const int frame = idle.width();
+    QPixmap strip(frame * 4, idle.height());
+    strip.fill(Qt::transparent);
+    QPainter painter(&strip);
+    painter.drawPixmap(0, 0, idle);
+    painter.drawPixmap(frame, 0, action);
+    painter.drawPixmap(frame * 2, 0, action);
+    painter.drawPixmap(frame * 3, 0, idle);
+    return strip;
+}
+
 } // namespace
 
 Fighter::Fighter(const QSize &bodySize)
@@ -34,7 +61,11 @@ Fighter::Fighter(const QSize &bodySize)
 
 bool Fighter::loadFrames(AnimState state, const QString &path,
                          int frameCount, int fw, int fh, int singleFrame) {
-    QPixmap sheet(path);
+    return loadFrames(state, QPixmap(path), frameCount, fw, fh, singleFrame);
+}
+
+bool Fighter::loadFrames(AnimState state, QPixmap sheet, int frameCount, int fw, int fh, int singleFrame)
+{
     if (sheet.isNull() || fw <= 0 || fh <= 0) return false;
     if (singleFrame >= 0) {
         const QRect frame(singleFrame * fw, 0, fw, fh);
@@ -73,6 +104,58 @@ bool Fighter::loadFrames(AnimState state, const QString &path,
     }
     m_bodyRect[i] = uni.isNull() ? QRect(0, 0, fw, fh) : uni;
     return true;
+}
+
+void Fighter::loadNinjaPoses(const QPixmap &atlas)
+{
+    if (atlas.isNull()) return;
+    m_fixedBody = true;
+    constexpr int frame = 180;
+    const QImage image = atlas.toImage().convertToFormat(QImage::Format_ARGB32);
+    // The throwing hand reaches a little past the nominal third quarter.
+    const int edges[]{0, atlas.width() * 23 / 100, atlas.width() * 49 / 100,
+                      atlas.width() * 79 / 100, atlas.width()};
+    QPixmap poses[4];
+    for (int i = 0; i < 4; ++i) {
+        const QRect cell(edges[i], 0, edges[i + 1] - edges[i], atlas.height());
+        const int height = i == 1 ? 47 : i == 3 ? 44 : 53;
+        poses[i] = atlasPose(atlas, image, cell, height, i == 2 ? 7 : 0);
+    }
+    const QPixmap toss = poseStrip(poses[0], poses[2]);
+    loadFrames(AnimState::Idle, poses[0], 1, frame, frame, -1);
+    loadFrames(AnimState::Walk, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Jump, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Attack, toss, 4, frame, frame, -1);
+    loadFrames(AnimState::Attack2, toss, 4, frame, frame, -1);
+    loadFrames(AnimState::Hurt, poses[3], 1, frame, frame, -1);
+    loadFrames(AnimState::Guard, poses[3], 1, frame, frame, -1);
+}
+
+void Fighter::loadWindPoses(const QPixmap &atlas)
+{
+    if (atlas.isNull()) return;
+    m_fixedBody = true;
+    constexpr int frame = 180;
+    const QImage image = atlas.toImage().convertToFormat(QImage::Format_ARGB32);
+    const int edges[]{0, 16, 36, 61, 80, 100};
+    const int heights[]{53, 48, 48, 71, 53};
+    const int offsets[]{0, 0, 9, 1, 8};
+    QPixmap poses[5];
+    for (int i = 0; i < 5; ++i) {
+        const int left = edges[i] * atlas.width() / 100;
+        const int right = edges[i + 1] * atlas.width() / 100;
+        poses[i] = atlasPose(atlas, image, QRect(left, 0, right - left, atlas.height()), heights[i], offsets[i]);
+    }
+
+    loadFrames(AnimState::Idle, poses[0], 1, frame, frame, -1);
+    loadFrames(AnimState::Walk, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Jump, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Attack, poseStrip(poses[0], poses[2]), 4, frame, frame, -1);
+    loadFrames(AnimState::Attack2, poseStrip(poses[0], poses[4]), 4, frame, frame, -1);
+    loadFrames(AnimState::Hurt, poses[1], 1, frame, frame, -1);
+    loadFrames(AnimState::Guard, poses[0], 1, frame, frame, -1);
+    loadFrames(AnimState::GlidePose, poses[3], 1, frame, frame, -1);
+    loadFrames(AnimState::SweepPose, poses[4], 1, frame, frame, -1);
 }
 
 void Fighter::loadLungePose(const QPixmap &atlas, int column, qreal anchor)
@@ -126,9 +209,9 @@ int Fighter::footGap(AnimState state) const {
     return gap > 0 ? gap : 0;
 }
 
-void Fighter::draw(QPainter &p) const
+void Fighter::draw(QPainter &p, DrawPose pose) const
 {
-    if (m_state == AnimState::Lunge && !m_lungePose.isNull()) {
+    if ((m_state == AnimState::Lunge || pose == DrawPose::Thrust) && !m_lungePose.isNull()) {
         const QRect body = getBodyBox();
         const int height = qRound(body.height() * 0.91);
         const int width = qRound(qreal(m_lungePose.width()) * height / m_lungePose.height());
@@ -141,7 +224,15 @@ void Fighter::draw(QPainter &p) const
         return;
     }
 
-    const AnimState visual = visualState();
+    AnimState visual = visualState();
+    if (pose == DrawPose::Guard && getFrameCount(AnimState::Guard) > 0)
+        visual = AnimState::Guard;
+    else if (pose == DrawPose::Glide && getFrameCount(AnimState::GlidePose) > 0)
+        visual = AnimState::GlidePose;
+    else if (pose == DrawPose::WindSweep && getFrameCount(AnimState::SweepPose) > 0)
+        visual = AnimState::SweepPose;
+    else if (pose == DrawPose::Run && getFrameCount(AnimState::Walk) > 0)
+        visual = AnimState::Walk;
     const int i = static_cast<int>(visual);
     if (visual == AnimState::Guard) {
         const QRect body = getBodyBox();
@@ -176,7 +267,9 @@ void Fighter::draw(QPainter &p) const
     }
 
     if (!m_sheet[i].isNull() && m_frameCount[i] > 0) {
-        QRect src(m_curFrame * w, 0, w, h);
+        // The umbrella strike strip stores the extended weapon pose in its second frame.
+        const int frame = pose == DrawPose::WindStrike ? 1 : m_curFrame;
+        QRect src(qMin(frame, m_frameCount[i] - 1) * w, 0, w, h);
         src.setRight(qMin(src.right(), m_sheet[i].width() - 1));
         p.drawPixmap(target, m_sheet[i], src);
         if (flashTicks > 0) {
@@ -221,7 +314,7 @@ int Fighter::getFrameCount(AnimState s) const {
 }
 
 QRect Fighter::getBodyBox() const {
-    if (m_state == AnimState::Guard || m_state == AnimState::Skill || m_state == AnimState::Lunge || m_state == AnimState::Counter)
+    if (m_fixedBody || m_state == AnimState::Guard || m_state == AnimState::Skill || m_state == AnimState::Lunge || m_state == AnimState::Counter)
         return bodyBox(AnimState::Idle);
     return bodyBox(m_state);
 }

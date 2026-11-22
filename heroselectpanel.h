@@ -16,12 +16,14 @@ namespace HeroSelect {
 // 面板用途：打电脑（选择英雄 / 选择对手）、本地双人（选择 1P / 2P 英雄）、
 // 木桩练习（只有一步：选择英雄）
 enum class Mode { VsComputer, VsLocal, Training };
+inline constexpr int CancelOption = HeroCount;
+inline constexpr int ConfirmOption = HeroCount + 1;
 
 struct Panel {
     Mode mode = Mode::VsComputer;
     int step = 0;                                        // 0 = 先选的角色，1 = 后选的角色
-    int cursor = 0;                                      // 0 = 左卡片，1 = 右卡片
-    int hover = -1;                                      // -1 无，0/1 卡片，2 取消，3 确认
+    int cursor = 0;                                      // 角色卡片索引
+    int hover = -1;                                      // -1 无，卡片索引或按钮常量
     HeroKind p1 = HeroKind::MartialHero;                 // 已确定的玩家角色
     HeroKind p2 = HeroKind::HeroKnight;                  // 已确定的对手角色
 
@@ -32,7 +34,7 @@ struct Panel {
     void setCursorHero(HeroKind kind);
 };
 
-// 卡片下标与英雄的固定对应关系（左 MartialHero，右 HeroKnight）
+// 卡片下标与英雄的固定对应关系。
 HeroKind heroAt(int index);
 int indexOfHero(HeroKind kind);
 
@@ -41,7 +43,7 @@ QRectF cardRect(int index);
 QRectF cancelRect();
 QRectF confirmRect();
 
-// 命中测试：返回 0/1 卡片、2 取消、3 确认、-1 无
+// 命中测试：返回卡片索引、按钮常量或 -1。
 int hitTest(const QPointF &pos);
 
 // 在画布坐标下绘制遮罩 + 面板（调用方已经 translate/scale 到画布原点）

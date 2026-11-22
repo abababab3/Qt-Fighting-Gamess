@@ -33,10 +33,11 @@ const Stage &stageFor(StageId id)
     return stages[static_cast<std::size_t>(id)];
 }
 
-void StagePhysics::step(Fighter &fighter, const Stage &stage)
+void StagePhysics::step(Fighter &fighter, const Stage &stage, double fallSpeedLimit)
 {
     const int previousBottom = fighter.getBodyBox().bottom();
     fighter.vy += Gravity;
+    if (fallSpeedLimit > 0) fighter.vy = qMin(fighter.vy, fallSpeedLimit);
     fighter.x = boundedX(fighter, fighter.x + fighter.vx);
     fighter.y += fighter.vy;
 
@@ -91,13 +92,58 @@ bool StagePhysics::blink(Fighter &fighter, int distance, const Stage &stage)
     return true;
 }
 
+bool StagePhysics::stepBehind(Fighter &fighter, const Fighter &target, const Stage &stage)
+{
+    constexpr int RearGap = 6;
+    const QRect body = fighter.getBodyBox();
+    const QRect targetBody = target.getBodyBox();
+    const bool behindOnLeft = target.facingRight;
+    const int shift = behindOnLeft ? targetBody.left() - RearGap - body.right()
+                                  : targetBody.right() + RearGap - body.left();
+    const double destination = fighter.x + shift;
+    if (qAbs(boundedX(fighter, destination) - destination) > 0.01) {
+        const int offset = targetBody.center().x() - body.center().x();
+        if (offset != 0) fighter.setFacing(offset > 0);
+        return false;
+    }
+
+    relocate(fighter, body.translated(shift, targetBody.bottom() - body.bottom()), stage);
+    fighter.setFacing(behindOnLeft);
+    return true;
+}
+
+void StagePhysics::relocate(Fighter &fighter, const QRect &destination, const Stage &stage)
+{
+    const QRect body = fighter.getBodyBox();
+    fighter.x = boundedX(fighter, fighter.x + destination.center().x() - body.center().x());
+    fighter.y += qMin(destination.bottom(), Stage::GroundY) - body.bottom();
+    fighter.vx = fighter.vy = 0;
+    fighter.standingPlatform = -1;
+    fighter.ignoredPlatform = -1;
+
+    const QRect landing = fighter.getBodyBox();
+    for (int i = 0; i < stage.platforms.size(); ++i) {
+        const auto &platform = stage.platforms.at(i);
+        if (platform.top() == landing.bottom() && overlapsHorizontally(landing, platform)) {
+            fighter.standingPlatform = i;
+            break;
+        }
+    }
+    fighter.onGround = landing.bottom() >= Stage::GroundY || fighter.standingPlatform >= 0;
+}
+
 bool StagePhysics::jump(Fighter &fighter)
 {
     if (!fighter.onGround) return false;
-    fighter.vy = JumpVelocity;
+    lift(fighter, -JumpVelocity);
+    return true;
+}
+
+void StagePhysics::lift(Fighter &fighter, double speed)
+{
+    fighter.vy = -speed;
     fighter.onGround = false;
     fighter.standingPlatform = -1;
-    return true;
 }
 
 void StagePhysics::fastFall(Fighter &fighter)

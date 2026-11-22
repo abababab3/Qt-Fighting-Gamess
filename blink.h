@@ -23,6 +23,9 @@ public:
     int followUpTicks() const { return m_followUpTicks; }
     int followUpDirection() const { return m_trailEnd.x() > m_trailStart.x() ? 1 : -1; }
     void clearFollowUp() { m_followUpTicks = 0; }
+    void spendSkillFollowUp();
+    void extendSkillCooldown();
+    int cooldownLength() const { return m_cooldownLength; }
     QPoint trailStart() const { return m_trailStart; }
     QPoint trailEnd() const { return m_trailEnd; }
 
@@ -30,6 +33,7 @@ private:
     int m_tapDirection = 0;
     qint64 m_lastTap = 0;
     int m_cooldown = 0;
+    int m_cooldownLength = CooldownTicks;
     int m_trailTicks = 0;
     int m_followUpTicks = 0;
     QPoint m_trailStart;

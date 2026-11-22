@@ -18,6 +18,7 @@ qt_add_executable(Qt-fighting-games
     combatskill.h combatskill.cpp
     stage.h stage.cpp
     blink.h blink.cpp
+    ninja.h ninja.cpp
     keybindings.h keybindings.cpp
     keysettingsdialog.h keysettingsdialog.cpp
     computerplayer.h computerplayer.cpp
@@ -46,7 +47,7 @@ qt_add_resources(Qt-fighting-games "app_resources"
         res/p1_attack1.png res/p1_attack2.png res/p1_hurt.png
         res/p2_ldle.png res/p2_walk.png res/p2_jump.png
         res/p2_attack1.png res/p2_attack2.png res/p2_hurt.png
-        res/p1_guard.png res/p2_guard.png res/lunge_poses.png
+        res/p1_guard.png res/p2_guard.png res/lunge_poses.png res/ninja_poses.png res/wind_poses.png
         audio/hit.wav audio/jump.wav audio/ko.wav audio/block.wav audio/parry.wav
         audio/music/menu.ogg audio/music/moonlit.ogg audio/music/bamboo.ogg audio/music/canyon.ogg
 )

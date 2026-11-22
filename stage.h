@@ -21,9 +21,12 @@ struct Stage {
 const Stage &stageFor(StageId id);
 
 namespace StagePhysics {
-void step(Fighter &fighter, const Stage &stage);
+void step(Fighter &fighter, const Stage &stage, double fallSpeedLimit = 0);
 bool jump(Fighter &fighter);
+void lift(Fighter &fighter, double speed);
 bool blink(Fighter &fighter, int distance, const Stage &stage);
+bool stepBehind(Fighter &fighter, const Fighter &target, const Stage &stage);
+void relocate(Fighter &fighter, const QRect &destination, const Stage &stage);
 void fastFall(Fighter &fighter);
 int surfaceBelow(const QRect &body, const Stage &stage);
 }

@@ -25,7 +25,7 @@ constexpr qreal PanelY = 84;
 constexpr qreal PanelW = 660;
 constexpr qreal PanelH = 432;
 
-constexpr qreal CardW = 290;
+constexpr qreal CardW = 141;
 constexpr qreal CardH = 250;
 constexpr qreal CardTop = PanelY + 96;
 
@@ -50,12 +50,18 @@ const Fighter &portraitOf(HeroKind kind)
 {
     static Fighter martial;
     static Fighter knight;
+    static Fighter ninja;
+    static Fighter wind;
     static bool loaded = false;
     if (!loaded) {
         loadHeroAssets(martial, HeroKind::MartialHero);
         loadHeroAssets(knight, HeroKind::HeroKnight);
+        loadHeroAssets(ninja, HeroKind::Ninja);
+        loadHeroAssets(wind, HeroKind::WindParasol);
         loaded = true;
     }
+    if (kind == HeroKind::WindParasol) return wind;
+    if (kind == HeroKind::Ninja) return ninja;
     return kind == HeroKind::HeroKnight ? knight : martial;
 }
 
@@ -122,12 +128,12 @@ namespace HeroSelect {
 
 HeroKind heroAt(int index)
 {
-    return index == 1 ? HeroKind::HeroKnight : HeroKind::MartialHero;
+    return static_cast<HeroKind>(qBound(0, index, HeroCount - 1));
 }
 
 int indexOfHero(HeroKind kind)
 {
-    return kind == HeroKind::HeroKnight ? 1 : 0;
+    return static_cast<int>(kind);
 }
 
 HeroKind Panel::cursorHero() const
@@ -147,7 +153,7 @@ QRectF panelRect()
 
 QRectF cardRect(int index)
 {
-    const qreal x = (index == 0) ? PanelX + 30 : PanelX + 340;
+    const qreal x = PanelX + 24 + index * 157;
     return QRectF(x, CardTop, CardW, CardH);
 }
 
@@ -163,11 +169,11 @@ QRectF confirmRect()
 
 int hitTest(const QPointF &pos)
 {
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < HeroCount; ++i) {
         if (cardRect(i).contains(pos)) return i;
     }
-    if (cancelRect().contains(pos)) return 2;
-    if (confirmRect().contains(pos)) return 3;
+    if (cancelRect().contains(pos)) return CancelOption;
+    if (confirmRect().contains(pos)) return ConfirmOption;
     return -1;
 }
 
@@ -228,8 +234,7 @@ void draw(QPainter &p, const Panel &panel)
     text(p, QRectF(kPanel.left() + 30, kPanel.top() + 58, 560, 20), subtitle, 13,
          QColor("#8b7883"), false, Qt::AlignLeft | Qt::AlignVCenter);
 
-    drawCard(p, panel, 0);
-    drawCard(p, panel, 1);
+    for (int i = 0; i < HeroCount; ++i) drawCard(p, panel, i);
 
     text(p, QRectF(kPanel.left() + 30, cancelRect().top(), 340, ButtonH),
          panel.opponentStep() ? QStringLiteral("← → 切换   ·   空格 确认   ·   Esc 上一步")
@@ -237,11 +242,11 @@ void draw(QPainter &p, const Panel &panel)
          12, QColor("#77656f"), false, Qt::AlignLeft | Qt::AlignVCenter);
 
     drawButton(p, cancelRect(), panel.opponentStep() ? QStringLiteral("上一步") : QStringLiteral("返回"),
-               false, panel.hover == 2);
+               false, panel.hover == CancelOption);
     drawButton(p, confirmRect(),
                single ? QStringLiteral("开始练习")
                       : (panel.opponentStep() ? QStringLiteral("开始对战") : QStringLiteral("下一步")),
-               true, panel.hover == 3);
+               true, panel.hover == ConfirmOption);
 
     p.restore();
 }

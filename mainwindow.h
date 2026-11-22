@@ -5,6 +5,7 @@
 #include <QWidget>
 
 #include "blink.h"
+#include "ninja.h"
 #include "computerplayer.h"
 #include "fighter.h"
 #include "gameui.h"
@@ -48,7 +49,7 @@ private:
 
     void gameLoop();
     void clearMovement();
-    void jump(Fighter &fighter, const char *soundAlias);
+    void jump(PlayerLogic &logic, const char *soundAlias);
     void startMatch(MatchMode mode);
     void openHeroPanel(HeroSelect::Mode mode);
     void startComputerMatch();
@@ -116,6 +117,8 @@ private:
 
     Blink m_p1Blink;
     Blink m_p2Blink;
+    NinjaKit m_p1Ninja;
+    NinjaKit m_p2Ninja;
     SkillEffect m_p1Skill;
     SkillEffect m_p2Skill;
     DummyMode m_dummyMode = DummyMode::Idle;
@@ -135,6 +138,7 @@ private:
 
     // 顿帧（hitstop）：命中瞬间冻结双方逻辑若干帧，打击感的第一来源
     int m_hitStopTicks = 0;
+    std::array<bool, 2> m_bufferedCounters{};
     int m_shakeTicks = 0;
     int m_shakeAmplitude = 0;
     static constexpr int ShakeTicks = 6;

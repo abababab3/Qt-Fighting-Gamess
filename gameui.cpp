@@ -1,6 +1,8 @@
 #include "gameui.h"
 #include "blink.h"
 #include "fighter.h"
+#include "hero.h"
+#include "ninja.h"
 #include "playerlogic.h"
 
 #include <QFont>
@@ -25,6 +27,7 @@ const QColor HurtboxColor("#6bd7ff");
 const QColor HitboxColor("#ff9764");
 const QColor SwordColor("#c99fff");
 const QColor LightningColor("#ffe28d");
+const QColor WindColor("#b6ecab");
 
 constexpr int Left = Qt::AlignLeft | Qt::AlignVCenter;
 constexpr int Right = Qt::AlignRight | Qt::AlignVCenter;
@@ -475,32 +478,38 @@ void drawBlinkTrail(QPainter &p, const Blink &blink, bool firstPlayer)
     p.restore();
 }
 
-void drawBlinkStatus(QPainter &p, const Blink &p1, const Blink &p2, bool showP2)
+void drawBlinkStatus(QPainter &p, const Blink &p1, const Blink &p2,
+                     SkillKind p1Skill, SkillKind p2Skill, bool showP2)
 {
-    const auto draw = [&](const QRect &area, const Blink &blink, bool first) {
+    const auto draw = [&](const QRect &area, const Blink &blink, SkillKind skill) {
         const int cooldown = blink.cooldown();
         const bool followUp = blink.followUpTicks() > 0;
-        const QString label = followUp ? (first ? QStringLiteral("影切") : QStringLiteral("破阵"))
+        const bool knight = skill == SkillKind::Lightning;
+        const bool ninja = skill == SkillKind::Shadow;
+        const bool wind = skill == SkillKind::Wind;
+        const QString label = followUp ? (wind ? QStringLiteral("下切") : ninja ? QStringLiteral("飞轮") :
+                                           knight ? QStringLiteral("破阵") : QStringLiteral("影切"))
                                        : QStringLiteral("瞬身");
-        const QColor accent = followUp ? (first ? SwordColor : Gold) : Blue;
-        const QString status = followUp ? QStringLiteral("按普攻") : cooldown > 0
+        const QColor accent = followUp ? (wind ? WindColor : ninja ? HurtboxColor : knight ? Gold : SwordColor) : Blue;
+        const QString status = followUp ? QStringLiteral("普攻／技能") : cooldown > 0
             ? QStringLiteral("%1 s").arg(cooldown * CombatTickMs / 1000.0, 0, 'f', 1)
             : QStringLiteral("就绪");
         panel(p, area, followUp ? accent : Border);
         text(p, area.adjusted(9, 0, -52, 0), label, 12, accent, true, Left);
-        text(p, area.adjusted(43, 0, -9, 0), status, 12, followUp || cooldown == 0 ? Ink : Muted, true, Right);
+        text(p, area.adjusted(36, 0, -9, 0), status, followUp ? 10 : 12, followUp || cooldown == 0 ? Ink : Muted, true, Right);
         const qreal remaining = followUp ? qreal(blink.followUpTicks()) / Blink::FollowUpTicks
-                                       : 1.0 - qreal(cooldown) / Blink::CooldownTicks;
+                                       : 1.0 - qreal(cooldown) / blink.cooldownLength();
         const int fill = qRound((area.width() - 14) * remaining);
         p.fillRect(QRect(area.left() + 7, area.bottom() - 3, fill, 2), accent);
     };
 
-    draw(QRect(181, 108, 100, 26), p1, true);
-    if (showP2) draw(QRect(519, 108, 100, 26), p2, false);
+    draw(QRect(181, 108, 100, 26), p1, p1Skill);
+    if (showP2) draw(QRect(519, 108, 100, 26), p2, p2Skill);
 }
 
 void drawLungeEffect(QPainter &p, const Fighter &fighter, SkillKind kind, int elapsed)
 {
+    if (kind == SkillKind::Shadow || kind == SkillKind::Wind) return;
     const auto spec = lungeSpec(kind);
     const bool knight = kind == SkillKind::Lightning;
     const int travelEnd = spec.windup + spec.travel;
@@ -569,14 +578,70 @@ void drawGuardEffect(QPainter &p, const Fighter &fighter, bool guarding)
     p.restore();
 }
 
+static void drawKnightCounter(QPainter &p, const QRect &body, int tick)
+{
+    const auto spec = counterSpec(SkillKind::Lightning);
+    const qreal foot = body.height() * .47;
+    if (tick <= spec.windup) {
+        const qreal charge = qreal(tick + 1) / (spec.windup + 1);
+        const QPolygonF shield{{12, -27}, {35, -22}, {35, 0}, {25, 16}, {13, 22},
+                               {4, 12}, {4, -19}};
+        p.setOpacity(.28 + charge * .68);
+        p.setPen(QPen(QColor("#f4bb68"), 2));
+        p.setBrush(QColor(193, 112, 47, 55));
+        p.drawPolygon(shield);
+        p.setPen(QPen(QColor("#ffedbb"), 2, Qt::SolidLine, Qt::RoundCap));
+        p.drawPolyline(QPolygonF{{13, -16}, {25, -20}, {25, -4}});
+        p.drawLine(QPointF(9, foot), QPointF(32, foot));
+        return;
+    }
+
+    const qreal age = qreal(tick - spec.windup - 1) / (spec.duration - spec.windup);
+    const qreal reach = spec.reach;
+    QPainterPath sweep;
+    sweep.moveTo(14, -34);
+    sweep.cubicTo(reach - 23, -49, reach * 1.10, -17, reach - 3, 10);
+    sweep.quadTo(reach - 12, 22, 28, foot);
+    p.setOpacity(qBound(0.0, 1.0 - age * 1.18, 1.0));
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(QColor("#b96535"), 13, Qt::SolidLine, Qt::RoundCap));
+    p.drawPath(sweep);
+    p.setPen(QPen(QColor("#ffd17e"), 6, Qt::SolidLine, Qt::RoundCap));
+    p.drawPath(sweep);
+    p.setPen(QPen(QColor("#fff6d5"), 2, Qt::SolidLine, Qt::RoundCap));
+    p.drawPath(sweep);
+
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(255, 189, 105, 140));
+    for (int i = 0; i < 5; ++i) {
+        const qreal x = 24 + i * 8 + age * (i + 1) * 3;
+        const qreal y = foot - (i % 3 + 1) * (10 + age * 20) / 3;
+        p.drawPolygon(QPolygonF{{x - 2, y}, {x + 3, y - 3}, {x + 6, y + 1}});
+    }
+}
+
 void drawCounterEffects(QPainter &p, const Fighter &fighter, const PlayerLogic &logic)
 {
     const int flash = logic.perfectFlashTicks();
     if (!logic.isCountering() && flash == 0) return;
 
     const bool knight = logic.skill() == SkillKind::Lightning;
-    const QColor accent = knight ? Gold : QColor("#9cefff");
+    const QColor accent = logic.skill() == SkillKind::Wind ? WindColor : knight ? Gold : QColor("#9cefff");
     const QRect body = fighter.getBodyBox();
+    const QLine trace = logic.counterTrace();
+    const int traceAge = logic.counterTick() - counterSpec(logic.skill()).windup;
+    if (logic.isCountering() && !trace.isNull() && traceAge >= 0 && traceAge < 8) {
+        p.save();
+        p.setOpacity(1.0 - traceAge / 8.0);
+        p.setPen(QPen(QColor("#397293"), 7, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(trace);
+        p.setPen(QPen(QColor("#bbf8ff"), 2, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(trace);
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(trace.p1(), 8 + traceAge * 2, 17 + traceAge * 2);
+        p.drawEllipse(trace.p2(), 11 + traceAge, 20 + traceAge);
+        p.restore();
+    }
     p.save();
     p.translate(body.center());
     p.scale(fighter.facingRight ? 1 : -1, 1);
@@ -607,22 +672,34 @@ void drawCounterEffects(QPainter &p, const Fighter &fighter, const PlayerLogic &
             p.drawRoundedRect(QRectF(-body.width() / 2.0 - 5, -body.height() / 2.0 - 3,
                                       body.width() + 10.0, body.height() + 6.0), 9, 9);
         }
-        if (tick > spec.windup) {
+        if (knight) {
+            drawKnightCounter(p, body, tick);
+        } else if (logic.skill() == SkillKind::Wind && tick > spec.windup) {
+            p.setOpacity(qBound(0.0, (spec.duration - tick) / 15.0, 1.0));
+            QPainterPath gust;
+            gust.moveTo(9, 3);
+            gust.cubicTo(41, -3, 58, -28, 45, -67);
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(QColor("#567e6b"), 9, Qt::SolidLine, Qt::RoundCap));
+            p.drawPath(gust);
+            p.setPen(QPen(WindColor, 3, Qt::SolidLine, Qt::RoundCap));
+            p.drawPath(gust);
+        } else if (logic.skill() == SkillKind::Shadow && tick > spec.windup) {
+            p.setOpacity(qBound(0.0, (spec.duration - tick) / 14.0, 1.0));
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(QColor("#8cdcf2"), 2, Qt::SolidLine, Qt::RoundCap));
+            p.drawArc(QRectF(-31, -13, 50, 28), 80 * 16, 195 * 16);
+            p.drawLine(QPointF(12, 0), QPointF(38, -3));
+        } else if (tick > spec.windup) {
             const qreal fade = qBound(0.0, (spec.duration - tick) / qreal(spec.duration - spec.windup), 1.0);
             p.setOpacity(fade);
             QPainterPath slash;
-            if (knight) {
-                slash.moveTo(11, 22);
-                slash.cubicTo(40, 24, 61, -5, 61, -27);
-                p.setPen(QPen(QColor("#ba713a"), 9, Qt::SolidLine, Qt::RoundCap));
-                p.drawPath(slash);
-            } else {
-                slash.moveTo(4, 13);
-                slash.quadTo(28, -17, 63, -9);
-                p.setPen(QPen(QColor("#3985a8"), 6, Qt::SolidLine, Qt::RoundCap));
-                p.drawPath(slash);
-            }
-            p.setPen(QPen(accent, knight ? 3 : 2, Qt::SolidLine, Qt::RoundCap));
+            slash.moveTo(-15, 7);
+            slash.lineTo(60, -6);
+            slash.lineTo(72, -8);
+            p.setPen(QPen(QColor("#3985a8"), 6, Qt::SolidLine, Qt::RoundCap));
+            p.drawPath(slash);
+            p.setPen(QPen(accent, 2, Qt::SolidLine, Qt::RoundCap));
             p.drawPath(slash);
         }
     }
@@ -640,9 +717,9 @@ void drawCounterStatus(QPainter &p, const PlayerLogic &p1, const PlayerLogic &p2
         const bool armored = logic.hasCounterArmor();
         if (!ready && !armored) return;
         const bool knight = logic.skill() == SkillKind::Lightning;
-        const QColor accent = knight ? Gold : QColor("#9cefff");
+        const QColor accent = logic.skill() == SkillKind::Wind ? WindColor : knight ? Gold : QColor("#9cefff");
         panel(p, area, accent);
-        text(p, area.adjusted(9, 0, -59, 0), knight ? QStringLiteral("铁壁回斩") : QStringLiteral("截刃"),
+        text(p, area.adjusted(9, 0, -59, 0), heroCounterName(heroForSkill(logic.skill())),
              12, accent, true, Left);
         text(p, area.adjusted(66, 0, -9, 0), ready ? QStringLiteral("按普攻") : QStringLiteral("霸体"),
              12, Ink, true, Right);
@@ -655,6 +732,314 @@ void drawCounterStatus(QPainter &p, const PlayerLogic &p1, const PlayerLogic &p2
     if (showP2) draw(QRect(626, 141, 149, 26), p2);
 }
 
+void drawNinjaKit(QPainter &p, const Fighter &fighter, const NinjaKit &kit)
+{
+    const QColor edge("#7bdde8");
+    p.save();
+    if (kit.smokeTicks() > 0) {
+        const qreal age = 1.0 - qreal(kit.smokeTicks()) / NinjaKit::SmokeTicks;
+        p.setOpacity(1.0 - age);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(edge, 1.5));
+        for (const QRect &where : {kit.smokeFrom(), kit.smokeTo()}) {
+            if (!where.isValid()) continue;
+            p.drawEllipse(QPointF(where.center()), 13 + 18 * age, 16 + 10 * age);
+            p.drawEllipse(QPointF(where.center() + QPoint(5, -6)), 9 + 16 * age, 11 + 12 * age);
+        }
+        p.setOpacity(1);
+    }
+    if (kit.hasClone()) {
+        const QRect box = kit.cloneBox();
+        p.setOpacity(kit.echoPending() ? .85 : .56);
+        fighter.drawIdlePortrait(p, box, kit.facesRight());
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(kit.echoPending() ? QColor("#d9fbff") : edge, 1.5));
+        p.drawArc(QRectF(box.adjusted(-4, -3, 4, 1)), 45 * 16, 100 * 16);
+        p.drawArc(QRectF(box.adjusted(-4, -3, 4, 1)), 223 * 16, 100 * 16);
+        p.drawLine(box.bottomLeft() + QPoint(0, 4),
+                   box.bottomLeft() + QPoint(box.width() * kit.cloneTicks() / NinjaKit::CloneTicks, 4));
+        if (kit.echoPending())
+            p.drawEllipse(box.center() + QPoint(kit.facesRight() ? 14 : -14, -6), 4, 4);
+        p.setOpacity(1);
+    }
+    for (const auto *shot : {&kit.own, &kit.echo}) {
+        if (shot->ticks <= 0) continue;
+        p.save();
+        p.translate(shot->area.center());
+        const QColor color = shot->kind == NinjaShot::Echo ? QColor("#aa8fff") : edge;
+        const qreal wide = shot->area.width() / 2.0;
+        const qreal high = shot->area.height() / 2.0;
+        if (shot->kind == NinjaShot::Shuriken) {
+            p.setPen(QPen(color, 2));
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(QPointF(), wide - 1, high - 1);
+            p.rotate(shot->ticks * 31 * shot->direction);
+            p.setPen(QPen(QColor("#d6fbff"), 2));
+            p.drawPolyline(QPolygonF{{0, -high}, {3, -3}, {high, 0}, {3, 3},
+                                     {0, high}, {-3, 3}, {-high, 0}, {-3, -3}, {0, -high}});
+        } else {
+            p.scale(shot->direction, 1);
+            p.setPen(QPen(color, shot->kind == NinjaShot::Counter ? 3 : 1.5, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(QPointF(-wide, 0), QPointF(wide - 4, 0));
+            p.setBrush(QColor("#e8f2ff"));
+            p.setPen(Qt::NoPen);
+            p.drawPolygon(QPolygonF{{wide, 0}, {wide - 10, 3}, {wide - 7, 0}, {wide - 10, -3}});
+        }
+        p.restore();
+    }
+    p.restore();
+}
+
+void drawNinjaStatus(QPainter &p, const NinjaKit &p1, const NinjaKit &p2)
+{
+    const auto draw = [&](const QRect &box, const NinjaKit &kit) {
+        if (!kit.hasClone()) return;
+        panel(p, box, HurtboxColor);
+        text(p, box.adjusted(8, 0, -8, 0),
+             kit.echoPending() ? QStringLiteral("分身准备补投") : QStringLiteral("普攻补投 · 技能换位"),
+             11, QColor("#b9f7ff"), true);
+    };
+    draw(QRect(25, 173, 149, 24), p1);
+    draw(QRect(626, 173, 149, 24), p2);
+}
+
+static void drawWindNormal(QPainter &p, const QRect &body, const WindNormalSpec &spec,
+                           int tick, bool sweep, bool airborne)
+{
+    const int strikeTick = tick - spec.startup;
+    constexpr int TrailTicks = 6;
+    if (strikeTick <= -4 || strikeTick > spec.active + TrailTicks) return;
+
+    p.save();
+    const QColor edge = sweep ? QColor("#8aefce") : QColor("#e0ffc0");
+    if (strikeTick <= 0) {
+        p.setOpacity(0.27 + (strikeTick + 3) * 0.18);
+        p.setPen(QPen(edge, 1.6, Qt::SolidLine, Qt::RoundCap));
+        const qreal y = airborne ? -5 : -13;
+        p.drawLine(QPointF(-23, y + 7), QPointF(-8, y));
+        p.drawLine(QPointF(-17, y + 13), QPointF(-6, y + 8));
+        p.restore();
+        return;
+    }
+
+    const qreal fade = 1.0 - qMax(0, strikeTick - spec.active) / qreal(TrailTicks + 1);
+    const qreal reach = spec.reach + 4;
+    const qreal tipY = airborne ? body.bottom() - body.center().y() + 30 : sweep ? 13 : -3;
+    const qreal rootY = airborne ? 1 : sweep ? -18 : 4;
+    const qreal curveY = tipY + (airborne ? 1 : sweep ? -28 : -6);
+    const qreal width = airborne || sweep ? 15 : 9;
+    const QPointF root(4, rootY);
+    const QPointF tip(reach, tipY);
+    const QPointF bend(reach * 0.72, curveY);
+
+    QPainterPath blade(root);
+    blade.quadTo(bend + QPointF(0, -width), tip);
+    blade.quadTo(bend + QPointF(-8, width), root);
+    blade.closeSubpath();
+    QLinearGradient color(root, tip);
+    color.setColorAt(0, QColor(42, 136, 109, 85));
+    color.setColorAt(0.65, edge);
+    color.setColorAt(1, QColor("#ffffed"));
+
+    p.setOpacity(fade);
+    p.setPen(QPen(QColor(17, 65, 57, 200), 4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(color);
+    p.drawPath(blade);
+
+    QPainterPath rim(root);
+    rim.quadTo(bend + QPointF(0, -width), tip);
+    p.setPen(QPen(QColor("#ffffed"), 2, Qt::SolidLine, Qt::RoundCap));
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(rim);
+
+    p.setPen(QPen(edge, 1.5, Qt::SolidLine, Qt::RoundCap));
+    const qreal drift = qMin(strikeTick, spec.active) * 1.5;
+    if (airborne) {
+        p.drawLine(QPointF(reach * 0.58, tipY - 7), QPointF(reach * 0.71 + drift, tipY + 5));
+        p.drawLine(QPointF(reach * 0.81, tipY - 17), QPointF(reach + 2, tipY - 4));
+    } else {
+        p.drawLine(QPointF(reach * 0.54, tipY + 8), QPointF(reach * 0.84 + drift, tipY + 6));
+        p.drawLine(QPointF(reach * 0.73, tipY - 14), QPointF(reach + 2, tipY - 11));
+    }
+    p.restore();
+}
+
+void drawWindEffects(QPainter &p, const Fighter &fighter, const PlayerLogic &logic)
+{
+    if (logic.skill() != SkillKind::Wind) return;
+    const int glide = logic.glideTicks();
+    const int normalTick = logic.windNormalTick();
+    if (glide == 0 && normalTick < 0 && !logic.isWindCharging() && !logic.isLunging()) return;
+
+    const QRect body = fighter.getBodyBox();
+    p.save();
+    p.translate(body.center());
+    p.scale(fighter.facingRight ? 1 : -1, 1);
+    p.setBrush(Qt::NoBrush);
+    const QColor mint("#c9f5bd");
+
+    if (logic.isWindCharging()) {
+        const QRectF arc(5, -body.height() / 2.0 - 5, 40, body.height() + 10);
+        const QColor accent = logic.windChargeEnhanced() ? QColor("#93e7e3") : mint;
+        p.setPen(QPen(QColor(89, 142, 119, 125), 6, Qt::SolidLine, Qt::RoundCap));
+        p.drawArc(arc, -75 * 16, 150 * 16);
+        p.setPen(QPen(accent, logic.windCaughtProjectile() ? 3.5 : 1.6, Qt::SolidLine, Qt::RoundCap));
+        p.drawArc(arc, -75 * 16, 150 * 16);
+        if (logic.windCaughtProjectile()) {
+            p.setBrush(mint);
+            p.drawEllipse(QPointF(44, 0), 3.0, 3.0);
+            p.setBrush(Qt::NoBrush);
+        }
+    }
+
+    if (glide > 0) {
+        const qreal phase = (WindGlideTicks - glide) % 12;
+        p.setOpacity(qMin(1.0, glide / 8.0));
+        p.setPen(QPen(mint, 1.3, Qt::SolidLine, Qt::RoundCap));
+        QPainterPath airflow;
+        airflow.moveTo(-35 - phase, -32 + phase);
+        airflow.cubicTo(-26, -35 + phase, -11, -28 + phase, -2, -32 + phase);
+        airflow.moveTo(-32 - phase, -16 + phase);
+        airflow.quadTo(-17, -13 + phase, -8, -18 + phase);
+        p.drawPath(airflow);
+        p.setOpacity(1.0);
+    }
+
+    if (normalTick >= 0) {
+        const bool sweep = fighter.state() == AnimState::Attack2;
+        drawWindNormal(p, body, windNormalSpec(sweep), normalTick, sweep, logic.isWindAirNormal());
+    } else if (logic.isLunging() &&
+               logic.lungeTick() <= lungeSpec(SkillKind::Wind).windup + lungeSpec(SkillKind::Wind).travel) {
+        p.setPen(QPen(QColor(157, 220, 175, 160), 2, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(-42, -14), QPointF(24, -8));
+        p.drawLine(QPointF(-26, 3), QPointF(30, 8));
+    } else if (const qreal reach = logic.windLungeReach(); reach > 0) {
+        QPainterPath sweep;
+        sweep.moveTo(10, -4);
+        sweep.quadTo(reach * .77, 9, reach, body.height() / 2.0 + 24);
+        p.setPen(QPen(QColor("#52866e"), 8, Qt::SolidLine, Qt::RoundCap));
+        p.drawPath(sweep);
+        p.setPen(QPen(mint, 2.2, Qt::SolidLine, Qt::RoundCap));
+        p.drawPath(sweep);
+    }
+    p.restore();
+}
+
+void drawWindStatus(QPainter &p, const PlayerLogic &p1, const PlayerLogic &p2)
+{
+    const auto draw = [&](const QRect &box, const PlayerLogic &logic) {
+        if (logic.isWindCharging() || logic.isWindChoosing()) {
+            QString label = QStringLiteral("短按借风 · 长按纳风");
+            if (logic.windChargeEnhanced()) label = QStringLiteral("逆风牵引 · 松手释放");
+            else if (logic.windCaughtProjectile()) label = QStringLiteral("已接弹 · 松手反击");
+            else if (logic.isWindCharging()) label = QStringLiteral("纳风 · 松手释放");
+            panel(p, box, WindColor);
+            text(p, box.adjusted(8, 0, -8, 0), label, 11, WindColor, true);
+            return;
+        }
+        if (logic.glideTicks() == 0) return;
+        panel(p, box, WindColor);
+        text(p, box.adjusted(8, 0, -8, 0), QStringLiteral("缓降中 · 速降收伞"),
+             11, WindColor, true);
+        const int width = (box.width() - 16) * logic.glideTicks() / WindGlideTicks;
+        p.fillRect(QRect(box.x() + 8, box.bottom() - 3, width, 2), WindColor);
+    };
+    draw(QRect(25, 173, 149, 24), p1);
+    draw(QRect(626, 173, 149, 24), p2);
+}
+
+void drawSkillWindup(QPainter &p, const Fighter &fighter, const PlayerLogic &logic)
+{
+    if (logic.skill() != SkillKind::Lightning || !logic.isCasting()) return;
+    const bool enhanced = logic.isEnhancedCast();
+    const int startup = skillSpec(logic.skill(), enhanced).startup;
+    const int tick = logic.skillCastTick();
+    if (tick > startup) return;
+
+    const QRect area = SkillEffect::spawn(logic.skill(), fighter, enhanced).area;
+    QColor accent = enhanced ? QColor("#9de4ff") : QColor("#edb96f");
+    const qreal charge = qreal(tick) / startup;
+    const qreal y = area.bottom() - 2;
+    const qreal left = area.left() + 4;
+    const qreal right = area.right() - 4;
+    const qreal x = area.center().x();
+
+    p.save();
+    p.setOpacity(.38 + charge * .46);
+    p.setPen(QPen(accent, 1.5, Qt::SolidLine, Qt::RoundCap));
+    accent.setAlpha(36);
+    p.setBrush(accent);
+    p.drawPolygon(QPolygonF{{left, y}, {left + 10, y - 9}, {right - 10, y - 9},
+                            {right, y}, {right - 10, y + 7}, {left + 10, y + 7}});
+    p.drawPolyline(QPolygonF{{x - 6, y - 3}, {x, y + 1}, {x + 6, y - 3}});
+    p.drawLine(QPointF(x, y - 12), QPointF(x, y - 21 - charge * 20));
+    p.restore();
+}
+
+static void drawLightningStrike(QPainter &p, const SkillEffect &effect)
+{
+    const QRect area = effect.area;
+    const bool enhanced = effect.enhanced;
+    const int duration = enhanced ? SkillEffect::EnhancedLightningTicks : SkillEffect::LightningTicks;
+    const int elapsed = duration - effect.lifetime;
+    const qreal age = qBound(0.0, qreal(elapsed) / duration, 1.0);
+    const QColor energy = enhanced ? QColor("#8bd8ff") : QColor("#ffca71");
+    const QColor glow = enhanced ? QColor("#416eae") : QColor("#a85e2c");
+    const QPointF impact(area.center().x(), area.bottom() - 1);
+
+    QColor wash = energy;
+    wash.setAlpha(qRound(55 * (1.0 - age)));
+    QRadialGradient bloom(impact, area.width() * .54);
+    bloom.setColorAt(0, wash);
+    wash.setAlpha(0);
+    bloom.setColorAt(1, wash);
+    p.setPen(Qt::NoPen);
+    p.setBrush(bloom);
+    p.drawEllipse(impact, area.width() * .55, 31);
+
+    const auto bolt = [&](qreal offset, qreal tilt, qreal core) {
+        const qreal x = impact.x() + offset;
+        const qreal h = area.height();
+        const qreal y = impact.y();
+        const qreal flicker = (elapsed % 3 - 1) * 3;
+        const QPolygonF spine{{x + tilt, y - h}, {x - 9 + flicker, y - h * .71},
+                              {x + 12, y - h * .57}, {x - 7 - flicker, y - h * .31},
+                              {x + 4, y - h * .19}, {x, y}};
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(glow, core * 3.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPolyline(spine);
+        p.setPen(QPen(energy, core * 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPolyline(spine);
+        p.setPen(QPen(QColor("#fff9e6"), core * .65, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPolyline(spine);
+        p.setPen(QPen(energy, 1.2));
+        p.drawPolyline(QPolygonF{spine[2], {x + 23, y - h * .48}, {x + 30, y - h * .51},
+                                 {x + 38, y - h * .34}});
+        p.drawPolyline(QPolygonF{spine[3], {x - 19, y - h * .22}, {x - 27, y - h * .25},
+                                 {x - 34, y - h * .09}});
+    };
+
+    p.setOpacity(qBound(0.0, 1.0 - age * 1.2, 1.0));
+    if (enhanced) {
+        bolt(-22, -22, 4);
+        bolt(23, 29, 3.5);
+    } else {
+        bolt(0, 24, 5);
+    }
+
+    p.setOpacity(1.0 - age);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(energy, 2));
+    p.drawEllipse(impact, 14 + age * (area.width() / 2.0 - 14), 3 + age * 9);
+    p.setBrush(energy);
+    p.setPen(Qt::NoPen);
+    for (int i = 0; i < 9; ++i) {
+        const qreal x = impact.x() + (i - 4) * (7 + 8 * age);
+        const qreal y = impact.y() - (i % 3 + 1) * (4 + 11 * age);
+        p.drawRect(QRectF(x, y, i % 2 == 0 ? 3 : 2, 2));
+    }
+}
+
 void drawSkillEffect(QPainter &p, const SkillEffect &effect)
 {
     if (effect.lifetime <= 0) return;
@@ -664,6 +1049,12 @@ void drawSkillEffect(QPainter &p, const SkillEffect &effect)
         if (effect.hit) p.setOpacity(qreal(effect.lifetime) / SkillEffect::ImpactTicks);
         p.translate(effect.area.center());
         p.scale(effect.direction, 1);
+        if (effect.enhanced) {
+            p.scale(1.42, 1.46);
+            p.setPen(QPen(QColor("#e1a1ff"), 1, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(QPointF(-30, 3), QPointF(16, -14));
+            p.drawLine(QPointF(-25, 12), QPointF(15, 8));
+        }
         QPainterPath wave;
         wave.moveTo(-30, 9);
         wave.quadTo(-4, 2, 15, -12);
@@ -675,26 +1066,27 @@ void drawSkillEffect(QPainter &p, const SkillEffect &effect)
         p.setPen(QPen(QColor("#ead6ff"), 2));
         p.drawLine(QPointF(-9, 5), QPointF(23, -7));
     } else if (effect.kind == SkillKind::Lightning) {
-        const QRect box = effect.area;
-        const int x = box.center().x();
-        const int top = box.top();
-        const int ground = box.bottom();
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor(255, 214, 112, effect.lifetime * 8));
-        p.drawEllipse(QRect(box.left(), ground - 12, box.width(), 24));
-
-        const QPolygon bolt{{x + 17, top}, {x - 18, top + 43}, {x + 4, top + 43},
-                             {x - 12, ground - 10}, {x + 28, top + 31}, {x + 10, top + 31},
-                             {x + 35, top}};
-        p.setPen(QPen(QColor("#e8aa52"), 1.5));
-        p.setBrush(LightningColor);
-        p.drawPolygon(bolt);
-
-        p.setPen(QPen(LightningColor, 2));
-        p.drawPolyline(QPolygon{{x - 9, ground - 8}, {x - 27, ground - 31},
-                                  {x - 43, ground - 29}, {x - 57, ground - 44}});
-        p.drawPolyline(QPolygon{{x + 8, ground - 4}, {x + 26, ground - 27},
-                                  {x + 44, ground - 25}, {x + 61, ground - 41}});
+        drawLightningStrike(p, effect);
+    } else if (effect.kind == SkillKind::Wind) {
+        const bool pull = effect.wind == WindGust::Pull;
+        const bool charged = effect.wind == WindGust::ChargedPush;
+        const qreal fade = effect.lifetime / qreal(SkillEffect::WindGustTicks);
+        const qreal halfReach = effect.area.width() / 2.0;
+        p.setOpacity(fade);
+        p.translate(effect.area.center());
+        p.scale(effect.direction * (pull ? -1 : 1), 1);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(pull ? QColor("#9be8e4") : WindColor, charged ? 3 : 1.8,
+                      Qt::SolidLine, Qt::RoundCap));
+        for (int i = -1; i <= 1; ++i) {
+            const qreal y = i * 10.0;
+            const qreal front = halfReach * (0.5 + (1 - fade) * 0.5) - qAbs(i) * 9;
+            QPainterPath stream;
+            stream.moveTo(-halfReach + qAbs(i) * 7, y * 1.5);
+            stream.cubicTo(-halfReach * 0.2, y * 0.6, front - 14, y * 1.3 - 6, front, y);
+            stream.lineTo(front - 8, y + 4);
+            p.drawPath(stream);
+        }
     }
     p.restore();
 }
@@ -725,13 +1117,19 @@ void drawSkillHitboxes(QPainter &p, const QRect &p1Skill, const QRect &p2Skill)
     p.restore();
 }
 
-void drawSkillStatus(QPainter &p, SkillKind p1, int p1Cooldown, SkillKind p2, int p2Cooldown)
+void drawSkillStatus(QPainter &p, SkillKind p1, int p1Cooldown, SkillKind p2, int p2Cooldown,
+                     bool enhancedP1, bool enhancedP2)
 {
-    const auto draw = [&](const QRect &area, SkillKind kind, int cooldown) {
+    const auto draw = [&](const QRect &area, SkillKind kind, int cooldown, bool enhanced) {
         if (kind == SkillKind::None) return;
         const bool sword = kind == SkillKind::SwordWave;
-        const QColor color = sword ? SwordColor : LightningColor;
-        const QString name = sword ? QStringLiteral("紫色剑气") : QStringLiteral("近身落雷");
+        const bool ninja = kind == SkillKind::Shadow;
+        const bool wind = kind == SkillKind::Wind;
+        const QColor color = wind ? WindColor : ninja ? HurtboxColor : sword ? SwordColor : LightningColor;
+        const QString name = wind ? (enhanced ? QStringLiteral("回风伞") : QStringLiteral("借风"))
+            : ninja ? (enhanced ? QStringLiteral("回影") : QStringLiteral("留影"))
+            : enhanced ? (sword ? QStringLiteral("风裂剑气") : QStringLiteral("双极落雷"))
+                       : (sword ? QStringLiteral("紫色剑气") : QStringLiteral("近身落雷"));
         const QString status = cooldown > 0
             ? QStringLiteral("%1 s").arg(cooldown * CombatTickMs / 1000.0, 0, 'f', 1)
             : QStringLiteral("就绪");
@@ -745,8 +1143,8 @@ void drawSkillStatus(QPainter &p, SkillKind p1, int p1Cooldown, SkillKind p2, in
         p.fillRect(QRect(area.left() + 7, area.bottom() - 3, width, 2), color);
     };
 
-    draw(QRect(25, 108, 149, 26), p1, p1Cooldown);
-    draw(QRect(626, 108, 149, 26), p2, p2Cooldown);
+    draw(QRect(25, 108, 149, 26), p1, p1Cooldown, enhancedP1);
+    draw(QRect(626, 108, 149, 26), p2, p2Cooldown, enhancedP2);
 }
 
 void drawRoundStart(QPainter &p, int countdown)
